@@ -1,0 +1,5 @@
+pandas
+pyreadstat
+plotly
+streamlit
+requests
