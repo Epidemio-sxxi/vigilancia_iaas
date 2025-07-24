@@ -93,26 +93,7 @@ fig.update_layout(
         tickformat=".0f",
         ticks="outside"
     ),
-    annotations=[
-        dict(
-            text="Instituto Mexicano del Seguro Social",
-            xref="paper", yref="paper",
-            x=0.5, y=1.17, showarrow=False,
-            font=dict(size=16), xanchor='center'
-        ),
-        dict(
-            text="UMAE Hospital de Especialidades Centro Médico Nacional Siglo XXI",
-            xref="paper", yref="paper",
-            x=0.5, y=1.12, showarrow=False,
-            font=dict(size=14), xanchor='center'
-        ),
-        dict(
-            text="División de Epidemiología",
-            xref="paper", yref="paper",
-            x=0.5, y=1.07, showarrow=False,
-            font=dict(size=13), xanchor='center'
-        )
-    ]
+  
 )
 
 # Mostrar gráfico
