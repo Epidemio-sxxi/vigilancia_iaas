@@ -1,9 +1,6 @@
 import pandas as pd
-import pyreadstat
 import plotly.express as px
 import streamlit as st
-import requests
-import io
 
 # Título institucional
 st.markdown("""
@@ -12,28 +9,18 @@ st.markdown("""
 <h5 style='text-align: center;'>División de Epidemiología</h5>
 """, unsafe_allow_html=True)
 
-# Función para cargar datos desde GitHub (CSV) y Google Drive (DTA)
+# Función para cargar datos CSV
 @st.cache_data
 def cargar_datos():
-    # Cargar CSV desde archivo local (este sí va en el repositorio GitHub)
     df_coords = pd.read_csv("plantilla_coordenadas_camas.csv")
-
-    # Descargar archivo DTA desde Google Drive
-    file_id = "1SJsa8K10vRhtUeG35E-knhUkB9OkViQl"
-    dta_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    response = requests.get(dta_url)
-    if response.status_code != 200:
-        st.error("❌ Error al descargar rediaas.dta desde Google Drive.")
-        st.stop()
-    
-    df_iaas, _ = pyreadstat.read_dta(io.BytesIO(response.content))
+    df_iaas = pd.read_csv("rediaas.csv")
     return df_coords, df_iaas
 
 # Cargar datos
 df_coords, df_iaas = cargar_datos()
 
 # Validación de columnas
-assert 'cama' in df_iaas.columns and 'iaas_sino' in df_iaas.columns, "Faltan columnas en rediaas.dta"
+assert 'cama' in df_iaas.columns and 'iaas_sino' in df_iaas.columns, "Faltan columnas en rediaas.csv"
 assert all(col in df_coords.columns for col in ['cama', 'coord_x', 'coord_y', 'piso']), "Faltan columnas en coordenadas"
 
 # Cálculo de % IAAS
