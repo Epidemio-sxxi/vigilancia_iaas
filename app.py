@@ -17,7 +17,7 @@ with col2:
     st.markdown("""
         <h4 style='text-align: center;'>Instituto Mexicano del Seguro Social</h4>
         <h5 style='text-align: center;'>UMAE Hospital de Especialidades CMN SXXI</h5>
-        <h5 style='text-align: center;'>Dashboard de IAAS</h5>
+        <h5 style='text-align: center;'>División de Epidemiología Hospitalaria</h5>
     """, unsafe_allow_html=True)
 
 with col3:
@@ -26,19 +26,21 @@ with col3:
 st.markdown("---")
 
 # ----------- MENÚ LATERAL -----------
-st.sidebar.header("🔹 Módulos")
-mostrar_plano = st.sidebar.checkbox("Mostrar plano del hospital")
+st.sidebar.header("🔹 Módulos del Dashboard")
+
+# SECTOR HOSPITALARIO como menú desplegable (sin checkbox)
+planos = os.listdir("data/planos")
+planos.sort()
+plano_seleccionado = st.sidebar.selectbox("Selecciona el sector del hospital:", planos)
+
 mostrar_curva_iaas = st.sidebar.checkbox("Mostrar curva epidémica IAAS")
 mostrar_curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
 mostrar_laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
 
-# ----------- SECCIÓN: PLANO HOSPITALARIO -----------
-if mostrar_plano:
-    st.subheader("Mapa hospitalario por sector")
-    planos = os.listdir("data/planos")
-    plano_seleccionado = st.selectbox("Selecciona el plano a mostrar:", planos)
-    st.image(f"data/planos/{plano_seleccionado}", use_column_width=True)
-    st.markdown("---")
+# ----------- SECCIÓN: PLANO DEL SECTOR SELECCIONADO -----------
+st.subheader("Plano del hospital")
+st.image(f"data/planos/{plano_seleccionado}", use_column_width=True)
+st.markdown("---")
 
 # ----------- SECCIÓN: CURVA EPIDÉMICA IAAS -----------
 if mostrar_curva_iaas:
