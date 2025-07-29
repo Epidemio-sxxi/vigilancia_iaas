@@ -26,20 +26,24 @@ with col3:
 st.markdown("---")
 
 # ----------- MENÚ LATERAL -----------
-st.sidebar.header("🔹 Módulos")
+st.sidebar.header("🔹 Módulos del Dashboard")
 
-# SECTOR HOSPITALARIO como menú desplegable (sin checkbox)
-planos = os.listdir("data/planos")
-planos.sort()
-plano_seleccionado = st.sidebar.selectbox("Selecciona el sector del hospital:", planos)
+# Listar los nombres de los planos sin la extensión .png
+planos_files = os.listdir("data/planos")
+planos_nombres = [os.path.splitext(f)[0] for f in planos_files if f.endswith(".png")]
+planos_nombres.sort(reverse=True)  # Orden descendente: 4A, 3A, 2A...
 
+# Selector sin extensión visible
+sector_seleccionado = st.sidebar.selectbox("Selecciona el sector del hospital:", planos_nombres)
+
+# Checkboxes para los módulos
 mostrar_curva_iaas = st.sidebar.checkbox("Mostrar curva epidémica IAAS")
 mostrar_curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
 mostrar_laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
 
 # ----------- SECCIÓN: PLANO DEL SECTOR SELECCIONADO -----------
 st.subheader("Plano del hospital")
-st.image(f"data/planos/{plano_seleccionado}", use_container_width=True)
+st.image(f"data/planos/{sector_seleccionado}.png", use_container_width=True)
 st.markdown("---")
 
 # ----------- SECCIÓN: CURVA EPIDÉMICA IAAS -----------
