@@ -1,44 +1,28 @@
-import streamlit as st
+import os
 import pandas as pd
 import plotly.express as px
-import os
+import streamlit as st
 
-# --- Encabezado institucional ---
-def encabezado():
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col1:
-        st.image("https://raw.githubusercontent.com/epivigilancia/vigilancia_iaas/main/img/logo_imss.png", width=100)
-    with col2:
-        st.markdown("<h4 style='text-align: center;'>UMAE Hospital de Especialidades CMN SXXI</h4>", unsafe_allow_html=True)
-        st.markdown("<h5 style='text-align: center;'>División de Epidemiología</h5>", unsafe_allow_html=True)
-    with col3:
-        st.image("https://raw.githubusercontent.com/epivigilancia/vigilancia_iaas/main/img/logo_epi.png", width=100)
+st.set_page_config(layout="wide")
 
-# --- Pantalla de inicio ---
-def menu_inicio():
-    encabezado()
-    st.markdown("<h2 style='text-align: center;'>Monitoreo de IAAS - REDIAAS</h2>", unsafe_allow_html=True)
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🛏️ Riesgos de IAAS por cama"):
-            st.session_state.pantalla = "riesgos"
-    with col2:
-        if st.button("📊 Vigilancia activa"):
-            st.session_state.pantalla = "vigilancia"
+# -------------------------- Encabezado institucional --------------------------
+st.markdown("""
+<div style='display: flex; justify-content: space-between; align-items: center;'>
+    <img src='https://raw.githubusercontent.com/tu_usuario/logo_imss/main/logo_imss.png' width='100'>
+    <div style='text-align: center;'>
+        <h4>UMAE Hospital de Especialidades CMN SXXI</h4>
+        <h5>División de Epidemiología</h5>
+        <h2>Monitoreo de IAAS - REDIAAS</h2>
+    </div>
+    <img src='https://raw.githubusercontent.com/tu_usuario/logo_imss/main/logo_epi.png' width='100'>
+</div>
+""", unsafe_allow_html=True)
 
-# --- Módulo 1: Riesgos IAAS por cama ---
-def modulo_riesgos():
-    if st.button("🔙 Regresar al menú"): st.session_state.pantalla = "inicio"
-    encabezado()
-
-    @st.cache_data
-    def cargar_datos():
-        df_coords = pd.read_csv("plantilla_coordenadas_camas.csv")
-        df_iaas = pd.read_csv("rediaas.csv")
-        return df_coords, df_iaas
-
-    df_coords, df_iaas = cargar_datos()
+# -------------------------- Módulos --------------------------
+def modulo_riesgos_iaas():
+    st.subheader("Visualización de riesgos de IAAS por cama (2024)")
+    df_coords = pd.read_csv("plantilla_coordenadas_camas.csv")
+    df_iaas = pd.read_csv("rediaas.csv")
 
     assert 'cama' in df_iaas.columns and 'iaas_sino' in df_iaas.columns
     assert all(col in df_coords.columns for col in ['cama', 'coord_x', 'coord_y', 'piso'])
@@ -50,51 +34,69 @@ def modulo_riesgos():
         .rename(columns={'sum': 'casos_iaas', 'count': 'total_pacientes'})
     )
     df_riesgo['porcentaje_iaas'] = 100 * df_riesgo['casos_iaas'] / df_riesgo['total_pacientes']
+
     df_final = pd.merge(df_coords, df_riesgo[['cama', 'porcentaje_iaas']], on='cama', how='left')
     df_final['porcentaje_iaas'] = df_final['porcentaje_iaas'].fillna(0)
 
-    orden_pisos = ["5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur",
-                   "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A"]
+    orden_pisos = ["5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur", "2B Norte", "2B Sur",
+                   "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A"]
     df_final['piso'] = pd.Categorical(df_final['piso'], categories=orden_pisos, ordered=True)
-    pisos_disponibles = df_final['piso'].dropna().unique()
-    piso_sel = st.selectbox("🛏️🦠 Selecciona el piso a visualizar", options=pisos_disponibles)
 
+    piso_sel = st.selectbox("🛏️🦠 Selecciona el piso a visualizar", options=df_final['piso'].dropna().unique())
     df_piso = df_final[df_final['piso'] == piso_sel].copy()
     df_piso['porcentaje_iaas_str'] = df_piso['porcentaje_iaas'].map("{:.2f}%".format)
 
     fig = px.scatter(
-        df_piso, x='coord_x', y='coord_y', color='porcentaje_iaas',
+        df_piso,
+        x='coord_x',
+        y='coord_y',
+        color='porcentaje_iaas',
         color_continuous_scale=[(0.0, "green"), (0.5, "orange"), (1.0, "red")],
-        range_color=(0, 100), text='cama', height=650,
-        labels={'coord_x': 'Coordenada X', 'coord_y': 'Coordenada Y', 'porcentaje_iaas': '% IAAS'},
-        hover_data={'cama': True, 'coord_x': True, 'coord_y': True,
-                    'porcentaje_iaas_str': True, 'porcentaje_iaas': False}
+        range_color=(0, 100),
+        text='cama',
+        hover_data={'cama': True, 'porcentaje_iaas_str': True},
+        height=650
     )
     fig.update_traces(marker=dict(size=25), textposition='top center')
     fig.update_layout(
-        title={'text': f"🛏️ Mapa de Riesgo de IAAS – Piso {piso_sel}", 'x': 0.01, 'xanchor': 'left'},
-        title_font=dict(size=16), yaxis_autorange="reversed",
-        coloraxis_colorbar=dict(title="% IAAS", tickformat=".0f", ticks="outside")
+        title=f"🛏️ Mapa de Riesgo de IAAS – Piso {piso_sel}",
+        yaxis_autorange="reversed",
+        coloraxis_colorbar=dict(title="% IAAS", tickformat=".0f")
     )
+
     st.plotly_chart(fig, use_container_width=True)
+    if st.button("🔙 Regresar al menú principal"):
+        st.session_state.menu = "inicio"
 
-# --- Módulo 2: Vigilancia activa ---
+
 def modulo_vigilancia():
-    if st.button("🔙 Regresar al menú"): st.session_state.pantalla = "inicio"
-    encabezado()
+    st.subheader("Vigilancia Activa por Sector Hospitalario")
+    try:
+        planos = sorted([f.replace(".png", "") for f in os.listdir("data/planos") if f.endswith(".png")], reverse=True)
+        plano_sel = st.selectbox("Selecciona el sector del hospital:", options=planos)
+        st.image(f"data/planos/{plano_sel}.png", use_column_width=True)
+    except Exception as e:
+        st.error(f"Error al cargar planos: {e}")
 
-    planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos"), reverse=True) if f.endswith(".png")]
-    sector_sel = st.selectbox("Selecciona el sector del hospital:", planos)
-    st.image(f"data/planos/{sector_sel}.png", caption=f"Plano del sector {sector_sel}", use_column_width=True)
-    # Aquí podrías agregar gráficas adicionales como curva epidémica, etc.
+    if st.button("🔙 Regresar al menú principal"):
+        st.session_state.menu = "inicio"
 
-# --- Controlador principal ---
-if 'pantalla' not in st.session_state:
-    st.session_state.pantalla = 'inicio'
 
-if st.session_state.pantalla == 'inicio':
-    menu_inicio()
-elif st.session_state.pantalla == 'riesgos':
-    modulo_riesgos()
-elif st.session_state.pantalla == 'vigilancia':
-    modulo_vigilancia(
+# -------------------------- Control de navegación --------------------------
+if "menu" not in st.session_state:
+    st.session_state.menu = "inicio"
+
+if st.session_state.menu == "inicio":
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📊 Riesgos de IAAS por cama"):
+            st.session_state.menu = "riesgos"
+    with col2:
+        if st.button("🧪 Vigilancia activa"):
+            st.session_state.menu = "vigilancia"
+
+elif st.session_state.menu == "riesgos":
+    modulo_riesgos_iaas()
+
+elif st.session_state.menu == "vigilancia":
+    modulo_vigilancia()
