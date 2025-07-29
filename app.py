@@ -1,10 +1,10 @@
+# Nuevo código con panel lateral izquierdo para vigilancia activa
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
 from PIL import Image
 
-# Configuración global
 st.set_page_config(layout="wide")
 
 # --- Encabezado institucional ---
@@ -20,7 +20,7 @@ with col2:
 with col3:
     st.image("https://raw.githubusercontent.com/oscarovalles/rediaas/main/data/logo_epi.png", width=90)
 
-# --- Función: Módulo Riesgo IAAS por cama ---
+# --- Funciones ---
 def modulo_riesgo():
     st.subheader("Mapa de Riesgo de IAAS por Cama")
 
@@ -62,48 +62,41 @@ def modulo_riesgo():
     fig.update_layout(title=f"🛏️ Mapa de Riesgo de IAAS – Piso {piso_sel}", yaxis_autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
-    if st.button("🔙 Regresar al menú principal"):
-        st.session_state.menu = None
-
-# --- Función: Módulo Vigilancia Activa ---
 def modulo_vigilancia():
-    st.subheader("Vigilancia Activa por Sector Hospitalario")
+    with st.sidebar:
+        plano_sel = st.selectbox("Selecciona el sector del hospital:",
+                                 [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")])
+        mostrar_curva = st.checkbox("Mostrar Curva Epidémica de IAAS", value=True)
+        mostrar_captura = st.checkbox("Mostrar Curva de Captura INOSO", value=True)
+        mostrar_laboratorio = st.checkbox("Mostrar Laboratorio", value=True)
 
-    planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos"), reverse=True) if f.endswith(".png")]
-    plano_sel = st.selectbox("Selecciona el sector del hospital:", options=planos)
     imagen_path = os.path.join("data/planos", f"{plano_sel}.png")
-
     if os.path.exists(imagen_path):
         st.image(imagen_path, use_container_width=True)
 
-    st.subheader("Curva Epidémica de IAAS")
-    if os.path.exists("data/curva_epidemica.png"):
-        st.image("data/curva_epidemica.png")
+    if mostrar_curva:
+        st.subheader("Curva Epidémica de IAAS")
+        if os.path.exists("data/curva_epidemica.png"):
+            st.image("data/curva_epidemica.png")
+    if mostrar_captura:
+        st.subheader("Curva de Captura INOSO")
+        if os.path.exists("data/curva_captura.png"):
+            st.image("data/curva_captura.png")
+    if mostrar_laboratorio:
+        st.subheader("Laboratorio")
+        if os.path.exists("data/laboratorio.png"):
+            st.image("data/laboratorio.png")
 
-    st.subheader("Curva de Captura INOSO")
-    if os.path.exists("data/curva_captura.png"):
-        st.image("data/curva_captura.png")
+# --- Navegación ---
+menu = st.sidebar.radio("Selecciona el módulo:", ["Menú principal", "Riesgos IAAS por cama", "Vigilancia activa"])
 
-    st.subheader("Laboratorio (cultivos/FilmArray)")
-    if os.path.exists("data/laboratorio.png"):
-        st.image("data/laboratorio.png")
-
-    if st.button("🔙 Regresar al menú principal"):
-        st.session_state.menu = None
-
-# --- Navegación del Menú ---
-if 'menu' not in st.session_state:
-    st.session_state.menu = None
-
-if st.session_state.menu is None:
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📊 Riesgos de IAAS por cama"):
-            st.session_state.menu = "riesgo"
-    with col2:
-        if st.button("🧪 Vigilancia activa"):
-            st.session_state.menu = "vigilancia"
-elif st.session_state.menu == "riesgo":
+if menu == "Menú principal":
+    st.markdown("""
+    <br><br><br><div style='text-align:center'>
+    <h3>Selecciona un módulo desde el menú izquierdo</h3>
+    </div>
+    """, unsafe_allow_html=True)
+elif menu == "Riesgos IAAS por cama":
     modulo_riesgo()
-elif st.session_state.menu == "vigilancia":
+elif menu == "Vigilancia activa":
     modulo_vigilancia()
