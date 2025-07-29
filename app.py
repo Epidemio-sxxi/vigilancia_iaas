@@ -1,100 +1,93 @@
+import streamlit as st
+import os
+from PIL import Image
 import pandas as pd
 import plotly.express as px
-import streamlit as st
 
-# Título institucional
-st.markdown("""
-<h4 style='text-align: center;'>Instituto Mexicano del Seguro Social</h4>
-<h5 style='text-align: center;'>UMAE Hospital de Especialidades Centro Médico Nacional Siglo XXI</h5>
-<h5 style='text-align: center;'>División de Epidemiología</h5>
-""", unsafe_allow_html=True)
+# ----------- CONFIGURACIÓN DE PÁGINA -----------
+st.set_page_config(layout="wide", page_title="Dashboard IAAS", page_icon="✅")
 
-# Función para cargar datos CSV
-@st.cache_data
-def cargar_datos():
-    df_coords = pd.read_csv("plantilla_coordenadas_camas.csv")
-    df_iaas = pd.read_csv("rediaas.csv")
-    return df_coords, df_iaas
+# ----------- TÍTULO INSTITUCIONAL CON LOGOS -----------
+col1, col2, col3 = st.columns([1, 6, 1])
 
-# Cargar datos
-df_coords, df_iaas = cargar_datos()
+with col1:
+    st.image("assets/imss_logo.png", width=100)
 
-# Validación de columnas
-assert 'cama' in df_iaas.columns and 'iaas_sino' in df_iaas.columns, "Faltan columnas en rediaas.csv"
-assert all(col in df_coords.columns for col in ['cama', 'coord_x', 'coord_y', 'piso']), "Faltan columnas en coordenadas"
+with col2:
+    st.markdown("""
+        <h4 style='text-align: center;'>Instituto Mexicano del Seguro Social</h4>
+        <h5 style='text-align: center;'>Residencia en Epidemiología Hospitalaria</h5>
+        <h5 style='text-align: center;'>Dashboard de IAAS - HES CMN SXXI</h5>
+    """, unsafe_allow_html=True)
 
-# Cálculo de % IAAS
-df_riesgo = (
-    df_iaas.groupby('cama')['iaas_sino']
-    .agg(['sum', 'count'])
-    .reset_index()
-    .rename(columns={'sum': 'casos_iaas', 'count': 'total_pacientes'})
-)
-df_riesgo['porcentaje_iaas'] = 100 * df_riesgo['casos_iaas'] / df_riesgo['total_pacientes']
+with col3:
+    st.image("assets/residencia_epi_logo.png", width=100)
 
-# Unir datos
-df_final = pd.merge(df_coords, df_riesgo[['cama', 'porcentaje_iaas']], on='cama', how='left')
-df_final['porcentaje_iaas'] = df_final['porcentaje_iaas'].fillna(0)
+st.markdown("---")
 
-# Orden de pisos
-orden_pisos = [
-    "5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur",
-    "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A"
-]
-df_final['piso'] = pd.Categorical(df_final['piso'], categories=orden_pisos, ordered=True)
+# ----------- MENÚ LATERAL -----------
+st.sidebar.header("🔹 Módulos del Dashboard")
+mostrar_plano = st.sidebar.checkbox("Mostrar plano del hospital")
+mostrar_curva_iaas = st.sidebar.checkbox("Mostrar curva epidémica IAAS")
+mostrar_curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
+mostrar_laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
 
-# Menú de selección
-pisos_disponibles = df_final['piso'].dropna().unique()
-piso_sel = st.selectbox("🛏️🦠 Selecciona el piso a visualizar", options=pisos_disponibles)
+# ----------- SECCIÓN: PLANO HOSPITALARIO -----------
+if mostrar_plano:
+    st.subheader("Mapa hospitalario por sector")
+    planos = os.listdir("data/planos")
+    plano_seleccionado = st.selectbox("Selecciona el plano a mostrar:", planos)
+    st.image(f"data/planos/{plano_seleccionado}", use_column_width=True)
+    st.markdown("---")
 
-# Filtrar datos por piso
-df_piso = df_final[df_final['piso'] == piso_sel].copy()
-df_piso['porcentaje_iaas_str'] = df_piso['porcentaje_iaas'].map("{:.2f}%".format)
+# ----------- SECCIÓN: CURVA EPIDÉMICA IAAS -----------
+if mostrar_curva_iaas:
+    st.subheader("Curva epidémica de IAAS por sector")
 
-# Generar gráfico
-fig = px.scatter(
-    df_piso,
-    x='coord_x',
-    y='coord_y',
-    color='porcentaje_iaas',
-    color_continuous_scale=[
-        (0.0, "green"),
-        (0.5, "orange"),
-        (1.0, "red")
-    ],
-    range_color=(0, 100),
-    text='cama',
-    labels={
-        'coord_x': 'Coordenada X',
-        'coord_y': 'Coordenada Y',
-        'porcentaje_iaas': '% IAAS'
-    },
-    hover_data={
-        'cama': True,
-        'coord_x': True,
-        'coord_y': True,
-        'porcentaje_iaas_str': True,
-        'porcentaje_iaas': False
-    },
-    height=650
-)
+    uploaded_file = st.file_uploader("Sube el archivo de IAAS (.csv o .dta)", type=["csv", "dta"], key="iaas_curva")
+    if uploaded_file is not None:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, parse_dates=["fec_evento"])
+        elif uploaded_file.name.endswith(".dta"):
+            import pyreadstat
+            df, meta = pyreadstat.read_dta(uploaded_file)
+            df["fec_evento"] = pd.to_datetime(df["fec_evento"], errors='coerce')
 
-fig.update_traces(marker=dict(size=25), textposition='top center')
-fig.update_layout(
-    title={
-        'text': f"🛏️ Mapa de Riesgo de IAAS – Piso {piso_sel}",
-        'x': 0.01,
-        'xanchor': 'left'
-    },
-    title_font=dict(size=16),
-    yaxis_autorange="reversed",
-    coloraxis_colorbar=dict(
-        title="% IAAS",
-        tickformat=".0f",
-        ticks="outside"
-    ),
-  
-)
+        required_cols = {"fec_evento", "sector", "iaas_sino"}
+        if required_cols.issubset(df.columns):
+            df_iaas = df[df["iaas_sino"] == 1].copy()
+            df_iaas["semana_epi"] = df_iaas["fec_evento"].dt.to_period("W").apply(lambda r: r.start_time)
+            curva = df_iaas.groupby(["semana_epi", "sector"]).size().reset_index(name="casos")
 
-# Mostrar gráfico
-st.plotly_chart(fig, use_container_width=True)
+            fig = px.line(
+                curva,
+                x="semana_epi",
+                y="casos",
+                color="sector",
+                markers=True,
+                title="Casos de IAAS por semana y sector",
+                labels={"semana_epi": "Semana", "casos": "Casos de IAAS"}
+            )
+
+            fig.update_layout(xaxis_title="Semana epidemiológica", yaxis_title="Casos", legend_title="Sector")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("El archivo debe tener las columnas: fec_evento, sector, iaas_sino.")
+    else:
+        st.info("Por favor sube un archivo con los datos de IAAS.")
+    st.markdown("---")
+
+# ----------- SECCIÓN: CURVA CAPTURA INOSO -----------
+if mostrar_curva_inoso:
+    st.subheader("Curva de captura de registros en INOSO")
+    st.info("[AQUÍ VA LA CURVA DE CAPTURA - datos por integrar]")
+    st.markdown("---")
+
+# ----------- SECCIÓN: LABORATORIO -----------
+if mostrar_laboratorio:
+    st.subheader("Resultados de laboratorio (cultivos y FilmArray)")
+    st.info("[AQUÍ VA LA TABLA DE LABORATORIO - datos por integrar]")
+    st.markdown("---")
+
+# ----------- PIE -----------
+st.markdown("<small>Versión prototipo - Julio 2025</small>", unsafe_allow_html=True)
