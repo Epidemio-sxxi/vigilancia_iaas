@@ -26,7 +26,7 @@ with col3:
 st.markdown("---")
 
 # ----------- MENÚ LATERAL -----------
-st.sidebar.header("🔹 Módulos del Dashboard")
+st.sidebar.header("🔹 Módulos")
 
 # SECTOR HOSPITALARIO como menú desplegable (sin checkbox)
 planos = os.listdir("data/planos")
@@ -39,7 +39,7 @@ mostrar_laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
 
 # ----------- SECCIÓN: PLANO DEL SECTOR SELECCIONADO -----------
 st.subheader("Plano del hospital")
-st.image(f"data/planos/{plano_seleccionado}", use_column_width=True)
+st.image(f"data/planos/{plano_seleccionado}", use_container_width=True)
 st.markdown("---")
 
 # ----------- SECCIÓN: CURVA EPIDÉMICA IAAS -----------
