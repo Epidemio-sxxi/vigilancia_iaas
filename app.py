@@ -26,7 +26,7 @@ with col3:
 st.markdown("---")
 
 # ----------- MENÚ LATERAL -----------
-st.sidebar.header("🔹 Módulos del Dashboard")
+st.sidebar.header("🔹 Módulos")
 mostrar_plano = st.sidebar.checkbox("Mostrar plano del hospital")
 mostrar_curva_iaas = st.sidebar.checkbox("Mostrar curva epidémica IAAS")
 mostrar_curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
