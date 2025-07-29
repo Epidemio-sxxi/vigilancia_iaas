@@ -26,7 +26,7 @@ with col3:
 st.markdown("---")
 
 # ----------- MENÚ LATERAL -----------
-st.sidebar.header("🔹 Módulos del Dashboard")
+st.sidebar.header("🔹 Módulos")
 
 # Listar los nombres de los planos sin la extensión .png
 planos_files = os.listdir("data/planos")
@@ -42,7 +42,7 @@ mostrar_curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
 mostrar_laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
 
 # ----------- SECCIÓN: PLANO DEL SECTOR SELECCIONADO -----------
-st.subheader("Plano del hospital")
+st.subheader("Mapeo de camas")
 st.image(f"data/planos/{sector_seleccionado}.png", use_container_width=True)
 st.markdown("---")
 
