@@ -11,17 +11,19 @@ st.set_page_config(layout="wide", page_title="Dashboard IAAS", page_icon="✅")
 col1, col2, col3 = st.columns([1, 6, 1])
 
 with col1:
-    st.image("assets/imss_logo.png", width=100)
+    st.image("assets/imss_logo.png", width=90)
 
 with col2:
     st.markdown("""
-        <h4 style='text-align: center;'>Instituto Mexicano del Seguro Social</h4>
-        <h5 style='text-align: center;'>UMAE Hospital de Especialidades CMN SXXI</h5>
-        <h5 style='text-align: center;'>División de Epidemiología Hospitalaria</h5>
+        <div style='text-align: center; line-height: 1.2;'>
+            <h4>Instituto Mexicano del Seguro Social</h4>
+            <h5>UMAE Hospital de Especialidades CMN SXXI</h5>
+            <h5>División de Epidemiología Hospitalaria</h5>
+        </div>
     """, unsafe_allow_html=True)
 
 with col3:
-    st.image("assets/residencia_epi_logo.png", width=100)
+    st.image("assets/residencia_epi_logo.png", width=90)
 
 st.markdown("---")
 
