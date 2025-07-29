@@ -16,8 +16,8 @@ with col1:
 with col2:
     st.markdown("""
         <h4 style='text-align: center;'>Instituto Mexicano del Seguro Social</h4>
-        <h5 style='text-align: center;'>Residencia en Epidemiología Hospitalaria</h5>
-        <h5 style='text-align: center;'>Dashboard de IAAS - HES CMN SXXI</h5>
+        <h5 style='text-align: center;'>UMAE Hospital de Especialidades CMN SXXI</h5>
+        <h5 style='text-align: center;'>Dashboard de IAAS</h5>
     """, unsafe_allow_html=True)
 
 with col3:
