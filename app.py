@@ -1,108 +1,110 @@
 import streamlit as st
-import os
 import pandas as pd
 import plotly.express as px
-from PIL import Image
+import pyreadstat
 
 # ----------- CONFIGURACIÓN DE PÁGINA -----------
-st.set_page_config(layout="wide", page_title="Dashboard IAAS", page_icon="✅")
+st.set_page_config(layout="wide", page_title="REDIAAS", page_icon="✅")
 
-# ----------- FUNCIONES AUXILIARES -----------
+# ----------- LOGOS Y TÍTULOS -----------
 def mostrar_encabezado():
     col1, col2, col3 = st.columns([1, 6, 1])
-
     with col1:
-        st.image("assets/imss_logo.png", width=90)
-
+        st.image("assets/imss_logo.png", width=100)
     with col2:
         st.markdown("""
-            <div style='text-align: center; line-height: 1.2;'>
-                <h4>Instituto Mexicano del Seguro Social</h4>
-                <h5>UMAE Hospital de Especialidades CMN SXXI</h5>
-                <h5>División de Epidemiología Hospitalaria</h5>
-            </div>
+            <h4 style='text-align: center; margin-bottom:0;'>UMAE Hospital de Especialidades CMN SXXI</h4>
+            <h5 style='text-align: center; margin-top:0;'>División de Epidemiología</h5>
         """, unsafe_allow_html=True)
-
     with col3:
-        st.image("assets/residencia_epi_logo.png", width=90)
+        st.image("assets/residencia_epi_logo.png", width=100)
 
-    st.markdown("---")
+# ----------- MENÚ PRINCIPAL -----------
+def menu_principal():
+    mostrar_encabezado()
+    st.markdown("<h1 style='text-align: center;'>REDIAAS</h1>", unsafe_allow_html=True)
+    st.markdown("##")
 
-def mostrar_menu_inicial():
-    st.markdown("""
-        <h2 style='text-align: center;'>Monitoreo de IAAS</h2>
-    """, unsafe_allow_html=True)
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🛏️ Riesgos de IAAS por cama", use_container_width=True):
-            st.session_state.vista = "riesgos"
+        if st.button("📊 Riesgos de IAAS por cama", use_container_width=True):
+            st.session_state.pantalla = "riesgos"
     with col2:
-        if st.button("🔍 Vigilancia activa", use_container_width=True):
-            st.session_state.vista = "vigilancia"
+        if st.button("🧪 Vigilancia activa", use_container_width=True):
+            st.session_state.pantalla = "vigilancia"
 
-# ----------- VISTA: RIESGOS POR CAMA -----------
-def vista_riesgos():
-    st.button("⬅️ Regresar al menú", on_click=volver_al_inicio)
-    st.subheader("Visualización de riesgos de IAAS por cama (2024)")
+# ----------- MÓDULO: RIESGO DE IAAS POR CAMA -----------
+def modulo_riesgos_iaas():
+    st.button("⬅️ Regresar al menú", on_click=regresar)
 
-    # Subir archivo rediaas
-    archivo = st.file_uploader("Sube la base 'rediaas.dta'", type=["dta"], key="upload_riesgos")
-    coords = st.file_uploader("Sube la plantilla de coordenadas (plantilla_coordenadas_camas.csv)", type="csv")
+    st.markdown("## Visualización de riesgos de IAAS por cama (2024)")
 
-    if archivo and coords:
-        import pyreadstat
-        df, meta = pyreadstat.read_dta(archivo)
-        df_coords = pd.read_csv(coords)
+    # Rutas a los archivos en GitHub
+    rediaas_url = "https://raw.githubusercontent.com/usuario/repositorio/main/data/rediaas.csv"
+    coordenadas_url = "https://raw.githubusercontent.com/usuario/repositorio/main/data/plantilla_coordenadas_camas.csv"
 
-        if 'cama' in df.columns and 'iaas_sino' in df.columns:
-            riesgo = df.groupby('cama')['iaas_sino'].mean().reset_index(name='riesgo')
-            df_mapa = df_coords.merge(riesgo, on='cama', how='left')
-            df_mapa['riesgo'] = df_mapa['riesgo'].fillna(0)
+    # Cargar los datos
+    df_rediaas = pd.read_csv(rediaas_url)
+    df_coords = pd.read_csv(coordenadas_url)
 
-            fig = px.scatter(
-                df_mapa,
-                x="x", y="y", text="cama",
-                color="riesgo",
-                color_continuous_scale=["green", "yellow", "red"],
-                range_color=[0, 1],
-                title="Mapa de camas con riesgo de IAAS",
-            )
-            fig.update_traces(textposition='top center')
-            fig.update_layout(height=600, xaxis_visible=False, yaxis_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.error("La base debe tener las columnas 'cama' e 'iaas_sino'")
+    # Generar proporción de IAAS por cama
+    iaas_por_cama = df_rediaas[df_rediaas["iaas_sino"] == 1].groupby("cama").size().reset_index(name="casos_iaas")
+    total_por_cama = df_rediaas.groupby("cama").size().reset_index(name="total_casos")
+    riesgo = pd.merge(total_por_cama, iaas_por_cama, on="cama", how="left").fillna(0)
+    riesgo["proporcion"] = (riesgo["casos_iaas"] / riesgo["total_casos"]) * 100
 
-# ----------- VISTA: VIGILANCIA ACTIVA -----------
-def vista_vigilancia():
-    st.button("⬅️ Regresar al menú", on_click=volver_al_inicio)
+    # Unir con coordenadas
+    df_plot = pd.merge(df_coords, riesgo, on="cama", how="left").fillna(0)
+
+    fig = px.scatter(
+        df_plot,
+        x="x",
+        y="y",
+        text="cama",
+        size="proporcion",
+        color="proporcion",
+        color_continuous_scale="YlOrRd",
+        labels={"proporcion": "% IAAS"},
+        title="Mapa de riesgo por cama (IAAS)",
+        height=700
+    )
+    fig.update_traces(textposition='top center')
+    fig.update_layout(xaxis_visible=False, yaxis_visible=False, coloraxis_colorbar=dict(title="% IAAS"))
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# ----------- MÓDULO: VIGILANCIA ACTIVA -----------
+def modulo_vigilancia():
+    st.button("⬅️ Regresar al menú", on_click=regresar)
+
     mostrar_encabezado()
-
-    # ----------- MENÚ LATERAL -----------
-    st.sidebar.header("🔹 Módulos")
-
-    planos_files = os.listdir("data/planos")
-    planos_nombres = [os.path.splitext(f)[0] for f in planos_files if f.endswith(".png")]
-    planos_nombres.sort(reverse=True)
-    sector_seleccionado = st.sidebar.selectbox("Selecciona el sector del hospital:", planos_nombres)
-
-    mostrar_curva_iaas = st.sidebar.checkbox("Mostrar curva epidémica IAAS")
-    mostrar_curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
-    mostrar_laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
-
-    st.subheader("Mapeo de camas")
-    st.image(f"data/planos/{sector_seleccionado}.png", use_container_width=True)
+    st.markdown("<h2 style='text-align:center;'>Monitoreo de IAAS - REDIAAS</h2>", unsafe_allow_html=True)
     st.markdown("---")
 
-    if mostrar_curva_iaas:
+    st.sidebar.header("🔹 Módulos")
+
+    # Menú de sectores
+    planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos"), reverse=True) if f.endswith(".png")]
+    sector = st.sidebar.selectbox("Selecciona el sector del hospital:", planos)
+
+    # Checkboxes
+    curva_iaas = st.sidebar.checkbox("Mostrar curva epidémica IAAS")
+    curva_inoso = st.sidebar.checkbox("Mostrar curva de captura INOSO")
+    laboratorio = st.sidebar.checkbox("Mostrar resultados de laboratorio")
+
+    # Mapa por sector
+    st.subheader("Mapeo de camas")
+    st.image(f"data/planos/{sector}.png", use_container_width=True)
+    st.markdown("---")
+
+    if curva_iaas:
         st.subheader("Curva epidémica de IAAS por sector")
         archivo = st.file_uploader("Sube el archivo de IAAS (.csv o .dta)", type=["csv", "dta"], key="iaas")
-        if archivo is not None:
+        if archivo:
             if archivo.name.endswith(".csv"):
                 df = pd.read_csv(archivo, parse_dates=["fec_evento"])
             else:
-                import pyreadstat
-                df, meta = pyreadstat.read_dta(archivo)
+                df, _ = pyreadstat.read_dta(archivo)
                 df["fec_evento"] = pd.to_datetime(df["fec_evento"], errors='coerce')
 
             if {"fec_evento", "sector", "iaas_sino"}.issubset(df.columns):
@@ -112,34 +114,29 @@ def vista_vigilancia():
 
                 fig = px.line(curva, x="semana_epi", y="casos", color="sector", markers=True,
                               labels={"semana_epi": "Semana", "casos": "Casos de IAAS"})
-                fig.update_layout(xaxis_title="Semana epidemiológica", yaxis_title="Casos", legend_title="Sector")
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.warning("El archivo debe tener las columnas: fec_evento, sector, iaas_sino.")
+                st.warning("El archivo debe contener: fec_evento, sector, iaas_sino")
 
-    if mostrar_curva_inoso:
+    if curva_inoso:
         st.subheader("Curva de captura de registros en INOSO")
-        st.info("[AQUÍ VA LA CURVA DE CAPTURA - datos por integrar]")
-        st.markdown("---")
+        st.info("Próximamente...")
 
-    if mostrar_laboratorio:
-        st.subheader("Resultados de laboratorio (cultivos y FilmArray)")
-        st.info("[AQUÍ VA LA TABLA DE LABORATORIO - datos por integrar]")
-        st.markdown("---")
+    if laboratorio:
+        st.subheader("Resultados de laboratorio")
+        st.info("Próximamente...")
 
-    st.markdown("<small>Versión prototipo - Julio 2025</small>", unsafe_allow_html=True)
+# ----------- FUNCIÓN DE RETORNO AL MENÚ -----------
+def regresar():
+    st.session_state.pantalla = "inicio"
 
-# ----------- FUNCIONES DE ESTADO -----------
-def volver_al_inicio():
-    st.session_state.vista = "inicio"
+# ----------- CONTROL DE FLUJO -----------
+if "pantalla" not in st.session_state:
+    st.session_state.pantalla = "inicio"
 
-# ----------- CONTROL DE VISTA -----------
-if "vista" not in st.session_state:
-    st.session_state.vista = "inicio"
-
-if st.session_state.vista == "inicio":
-    mostrar_menu_inicial()
-elif st.session_state.vista == "riesgos":
-    vista_riesgos()
-elif st.session_state.vista == "vigilancia":
-    vista_vigilancia()
+if st.session_state.pantalla == "inicio":
+    menu_principal()
+elif st.session_state.pantalla == "riesgos":
+    modulo_riesgos_iaas()
+elif st.session_state.pantalla == "vigilancia":
+    modulo_vigilancia()
