@@ -68,10 +68,11 @@ def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
     planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")]
-   st.markdown("##### Selecciona el sector del hospital:")
-col_sel, _ = st.columns([1.2, 3])
-with col_sel:
-    plano_sel = st.selectbox("", options=planos, label_visibility="collapsed")
+
+    st.markdown("##### Selecciona el sector del hospital:")
+    col_sel, _ = st.columns([1.2, 3])
+    with col_sel:
+        plano_sel = st.selectbox("", options=planos, label_visibility="collapsed")
 
     imagen_path = os.path.join("data/planos", f"{plano_sel}.png")
 
