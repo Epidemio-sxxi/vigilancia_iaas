@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# Configuración global
+# --- Configuración global ---
 st.set_page_config(layout="wide")
 
 # --- Encabezado institucional ---
@@ -61,10 +61,9 @@ def modulo_riesgo():
     fig.update_layout(title=f"🛏️ Mapa de Riesgo – Piso {piso_sel}", title_font=dict(size=16), yaxis_autorange="reversed")
 
     st.plotly_chart(fig, use_container_width=True)
-
     st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
-# --- Módulo: Vigilancia Activa ---
+# --- Módulo: Vigilancia Activa tipo HAIViz ---
 def modulo_vigilancia():
     st.subheader("🧪 Vigilancia Activa por Sector Hospitalario")
 
@@ -72,35 +71,53 @@ def modulo_vigilancia():
     plano_sel = st.selectbox("Selecciona el sector del hospital:", options=planos)
     imagen_path = os.path.join("data/planos", f"{plano_sel}.png")
 
-    if os.path.exists(imagen_path):
-        st.image(imagen_path, use_container_width=True)
-    else:
-        st.error(f"No se encontró el plano: {imagen_path}")
+    col1, col2 = st.columns([1, 4])
 
-    st.subheader("Curva Epidémica de IAAS")
-    curva_epidemica_path = "data/curva_epidemica.png"
-    if os.path.exists(curva_epidemica_path):
-        st.image(curva_epidemica_path, use_container_width=True)
-    else:
-        st.warning("No se encontró la imagen de la curva epidémica.")
+    with col1:
+        st.markdown("### 🧭 Módulos disponibles")
+        mostrar_curva_epidemica = st.checkbox("❌ Curva Epidémica de IAAS", value=True)
+        mostrar_curva_captura = st.checkbox("❌ Curva de Captura INOSO", value=True)
+        mostrar_laboratorio = st.checkbox("❌ Laboratorio (cultivos/FilmArray)", value=True)
+        mostrar_censo = st.checkbox("❌ Censo nominal de casos", value=False)
 
-    st.subheader("Curva de Captura INOSO")
-    curva_captura_path = "data/curva_captura.png"
-    if os.path.exists(curva_captura_path):
-        st.image(curva_captura_path, use_container_width=True)
-    else:
-        st.warning("No se encontró la imagen de la curva de captura INOSO.")
+        st.markdown("###")
+        st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
-    st.subheader("Laboratorio (cultivos/FilmArray)")
-    laboratorio_path = "data/laboratorio.png"
-    if os.path.exists(laboratorio_path):
-        st.image(laboratorio_path, use_container_width=True)
-    else:
-        st.warning("No se encontró la imagen del laboratorio.")
+    with col2:
+        if os.path.exists(imagen_path):
+            st.image(imagen_path, use_container_width=True, caption=f"Plano sector {plano_sel}")
+        else:
+            st.warning("⚠️ No se encontró el plano del sector.")
 
-    st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
+        if mostrar_curva_epidemica:
+            st.subheader("📈 Curva Epidémica de IAAS")
+            path_curva = "data/curva_epidemica.png"
+            if os.path.exists(path_curva):
+                st.image(path_curva, use_container_width=True)
+            else:
+                st.warning("No se encontró la imagen de la curva epidémica.")
 
-# --- Interfaz principal con menú único (solo botones grandes) ---
+        if mostrar_curva_captura:
+            st.subheader("📊 Curva de Captura INOSO")
+            path_captura = "data/curva_captura.png"
+            if os.path.exists(path_captura):
+                st.image(path_captura, use_container_width=True)
+            else:
+                st.warning("No se encontró la imagen de la curva de captura INOSO.")
+
+        if mostrar_laboratorio:
+            st.subheader("🧫 Laboratorio (cultivos/FilmArray)")
+            path_lab = "data/laboratorio.png"
+            if os.path.exists(path_lab):
+                st.image(path_lab, use_container_width=True)
+            else:
+                st.warning("No se encontró la imagen del laboratorio.")
+
+        if mostrar_censo:
+            st.subheader("🗂️ Censo nominal de casos")
+            st.info("Esta sección se integrará más adelante desde Google Drive.")
+
+# --- Menú principal ---
 if 'menu' not in st.session_state:
     st.session_state.menu = None
 
@@ -108,12 +125,13 @@ if st.session_state.menu is None:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("###")
-        if st.button("📊 Riesgos de IAAS por cama", key="btn_riesgo", use_container_width=True):
+        if st.button("📊 Riesgos de IAAS por cama", use_container_width=True):
             st.session_state.menu = "riesgo"
-        if st.button("🧪 Vigilancia activa", key="btn_vigilancia", use_container_width=True):
+        if st.button("🧪 Vigilancia activa", use_container_width=True):
             st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
     modulo_riesgo()
+
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
