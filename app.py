@@ -75,10 +75,10 @@ def modulo_vigilancia():
 
     with col1:
         st.markdown("### 🧭 Módulos disponibles")
-        mostrar_curva_epidemica = st.checkbox("❌ Curva Epidémica de IAAS", value=True)
-        mostrar_curva_captura = st.checkbox("❌ Curva de Captura INOSO", value=True)
-        mostrar_laboratorio = st.checkbox("❌ Laboratorio (cultivos/FilmArray)", value=True)
-        mostrar_censo = st.checkbox("❌ Censo nominal de casos", value=False)
+        mostrar_curva_epidemica = st.checkbox("Curva Epidémica de IAAS", value=False)
+        mostrar_curva_captura = st.checkbox("Captura en INOSO", value=False)
+        mostrar_laboratorio = st.checkbox("Laboratorio", value=False)
+        mostrar_censo = st.checkbox("Censo nominal de casos", value=False)
 
         st.markdown("###")
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
