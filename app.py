@@ -65,7 +65,7 @@ def modulo_riesgo():
 
 # --- Módulo: Vigilancia Activa tipo HAIViz ---
 def modulo_vigilancia():
-    st.subheader("🧪 Vigilancia Activa por Sector Hospitalario")
+    st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
     planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")]
     plano_sel = st.selectbox("Selecciona el sector del hospital:", options=planos)
@@ -106,7 +106,7 @@ def modulo_vigilancia():
                 st.warning("No se encontró la imagen de la curva de captura INOSO.")
 
         if mostrar_laboratorio:
-            st.subheader("🧫 Laboratorio (cultivos/FilmArray)")
+            st.subheader("🧪 Laboratorio (cultivos/FilmArray)")
             path_lab = "data/laboratorio.png"
             if os.path.exists(path_lab):
                 st.image(path_lab, use_container_width=True)
@@ -127,7 +127,7 @@ if st.session_state.menu is None:
         st.markdown("###")
         if st.button("📊 Riesgos de IAAS por cama", use_container_width=True):
             st.session_state.menu = "riesgo"
-        if st.button("🧪 Vigilancia activa", use_container_width=True):
+        if st.button("🔍 Vigilancia activa", use_container_width=True):
             st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
