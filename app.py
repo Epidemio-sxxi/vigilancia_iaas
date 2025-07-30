@@ -106,7 +106,7 @@ def modulo_vigilancia():
                 st.warning("No se encontró la imagen de la curva de captura INOSO.")
 
         if mostrar_laboratorio:
-            st.subheader("🧪 Laboratorio (cultivos/FilmArray)")
+            st.subheader("🧪 Laboratorio")
             path_lab = "data/laboratorio.png"
             if os.path.exists(path_lab):
                 st.image(path_lab, use_container_width=True)
