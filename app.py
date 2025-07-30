@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# --- Configuración global ---
+# Configuración global
 st.set_page_config(layout="wide")
 
 # --- Encabezado institucional ---
@@ -19,7 +19,7 @@ with col2:
 with col3:
     st.image("https://raw.githubusercontent.com/oscarovalles/rediaas/main/data/logo_epi.png", width=90)
 
-# --- Función: Módulo Riesgo IAAS por cama ---
+# --- Módulo: Riesgo IAAS por cama ---
 def modulo_riesgo():
     st.subheader("🛏️ Mapa de Riesgo de IAAS por Cama")
 
@@ -41,7 +41,8 @@ def modulo_riesgo():
     df_final = pd.merge(df_coords, df_riesgo[['cama', 'porcentaje_iaas']], on='cama', how='left')
     df_final['porcentaje_iaas'] = df_final['porcentaje_iaas'].fillna(0)
 
-    orden_pisos = ["5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur", "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A"]
+    orden_pisos = ["5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur", "2B Norte", "2B Sur",
+                   "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A"]
     df_final['piso'] = pd.Categorical(df_final['piso'], categories=orden_pisos, ordered=True)
 
     piso_sel = st.selectbox("Selecciona el piso a visualizar:", options=df_final['piso'].dropna().unique())
@@ -61,10 +62,9 @@ def modulo_riesgo():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    if st.button("🔙 Regresar al menú principal"):
-        st.session_state.menu = None
+    st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
-# --- Función: Módulo Vigilancia Activa ---
+# --- Módulo: Vigilancia Activa ---
 def modulo_vigilancia():
     st.subheader("🧪 Vigilancia Activa por Sector Hospitalario")
 
@@ -74,36 +74,46 @@ def modulo_vigilancia():
 
     if os.path.exists(imagen_path):
         st.image(imagen_path, use_container_width=True)
+    else:
+        st.error(f"No se encontró el plano: {imagen_path}")
 
     st.subheader("Curva Epidémica de IAAS")
-    st.image("data/curva_epidemica.png")
+    curva_epidemica_path = "data/curva_epidemica.png"
+    if os.path.exists(curva_epidemica_path):
+        st.image(curva_epidemica_path, use_container_width=True)
+    else:
+        st.warning("No se encontró la imagen de la curva epidémica.")
 
     st.subheader("Curva de Captura INOSO")
-    st.image("data/curva_captura.png")
+    curva_captura_path = "data/curva_captura.png"
+    if os.path.exists(curva_captura_path):
+        st.image(curva_captura_path, use_container_width=True)
+    else:
+        st.warning("No se encontró la imagen de la curva de captura INOSO.")
 
     st.subheader("Laboratorio (cultivos/FilmArray)")
-    st.image("data/laboratorio.png")
+    laboratorio_path = "data/laboratorio.png"
+    if os.path.exists(laboratorio_path):
+        st.image(laboratorio_path, use_container_width=True)
+    else:
+        st.warning("No se encontró la imagen del laboratorio.")
 
-    if st.button("🔙 Regresar al menú principal"):
-        st.session_state.menu = None
+    st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
-# --- Interfaz principal con menú central ---
+# --- Interfaz principal con menú único (solo botones grandes) ---
 if 'menu' not in st.session_state:
     st.session_state.menu = None
 
 if st.session_state.menu is None:
-    st.markdown("""
-        <div style='text-align:center;'>
-            <br><br>
-            <button onclick="document.getElementById('btn_riesgo').click()" style='font-size:20px;padding:20px;margin:15px;width:300px;'>📊 Riesgos de IAAS por cama</button><br>
-            <button onclick="document.getElementById('btn_vigilancia').click()" style='font-size:20px;padding:20px;margin:15px;width:300px;'>🧪 Vigilancia activa</button>
-        </div>
-    """, unsafe_allow_html=True)
-    st.button("📊 Ingresar a Riesgos IAAS por Cama", key="btn_riesgo", on_click=lambda: st.session_state.update(menu="riesgo"))
-    st.button("🧪 Ingresar a Vigilancia Activa", key="btn_vigilancia", on_click=lambda: st.session_state.update(menu="vigilancia"))
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("###")
+        if st.button("📊 Riesgos de IAAS por cama", key="btn_riesgo", use_container_width=True):
+            st.session_state.menu = "riesgo"
+        if st.button("🧪 Vigilancia activa", key="btn_vigilancia", use_container_width=True):
+            st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
     modulo_riesgo()
-
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
