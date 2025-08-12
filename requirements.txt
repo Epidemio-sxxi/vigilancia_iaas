@@ -3,3 +3,5 @@ pyreadstat
 plotly
 streamlit
 requests
+gspread
+oauth2client
