@@ -1,6 +1,7 @@
-pandas
-plotly
-gspread
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
+streamlit>=1.36
+pandas>=2.2
+plotly>=5.22
+gspread>=6.0
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
