@@ -33,14 +33,12 @@ with col3:
 # ======================================================
 #     Conexión a Google Sheets (Service Account + CSV)
 # ======================================================
-# ID por defecto (puedes sobreescribirlo en st.secrets["sheet_id"] o env REDIAAS_SHEET_ID)
 SHEET_ID = st.secrets.get(
     "sheet_id",
     os.environ.get("REDIAAS_SHEET_ID", "1dXRRepFI6l3t6kW6pZ3BJo1G63EESINCUOd6L98V9E0"),
 )
 
-# --- NUEVO: mapa de gid por pestaña para fallback CSV (edítalo si tus pestañas tienen otro gid) ---
-# Si no conoces el gid, abre la pestaña en Google Sheets y copia el número al final de la URL (gid=XXXXX).
+# map de gid para fallback CSV (ajústalo si tus pestañas no son gid=0)
 DEFAULT_SHEET_GID_MAP = {
     "Vigilancia": st.secrets.get("gid_vigilancia", os.environ.get("REDIAAS_GID_VIGILANCIA", "0")),
     "Histórico":  st.secrets.get("gid_historico",  os.environ.get("REDIAAS_GID_HISTORICO",  "0")),
@@ -49,33 +47,28 @@ DEFAULT_SHEET_GID_MAP = {
 GS_READY = False
 _gs_err: Optional[str] = None
 
-# Helper: valida que existan credenciales en secrets
 def _get_sa_info():
     sa = st.secrets.get("gcp_service_account")
     if not sa or not isinstance(sa, dict) or not sa.get("client_email"):
         raise RuntimeError("Falta st.secrets['gcp_service_account'] (JSON del Service Account)")
     return sa
 
-# Intento 1: gspread + google.oauth2 (recomendado)
+# Intento 1: gspread + google.oauth2
 try:
     import gspread
     from google.oauth2.service_account import Credentials as GA_Credentials
-
     SCOPE = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
-
     def _gc_client():
         creds_dict = _get_sa_info()
         creds = GA_Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
         return gspread.authorize(creds)
-
     _ = st.secrets.get("gcp_service_account")
     GS_READY = True
 except Exception as e1:
     _gs_err = str(e1)
-    # Intento 2: compatibilidad con oauth2client si el proyecto ya lo usa
     try:
         import gspread  # type: ignore
         from oauth2client.service_account import ServiceAccountCredentials  # type: ignore
@@ -83,31 +76,22 @@ except Exception as e1:
             "https://www.googleapis.com/auth/spreadsheets.readonly",
             "https://www.googleapis.com/auth/drive.readonly",
         ]
-
         def _gc_client():
             creds_dict = _get_sa_info()
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
             return gspread.authorize(creds)
-
         _ = st.secrets.get("gcp_service_account")
         GS_READY = True
     except Exception as e2:
         _gs_err = f"OAuth error: {e1} | {e2}"
         GS_READY = False
 
-# --- NUEVO: lector CSV público (sin credenciales) ---
 def _leer_csv_publico(sheet_id: str, gid: str) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
     return pd.read_csv(url)
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
-    """
-    Lee una pestaña del Google Sheet por nombre.
-    - Si hay Service Account (GS_READY=True): usa gspread.
-    - Si no, cae a CSV público usando gid_map[tab_name].
-    Normaliza columnas y parsea fechas comunes.
-    """
     if GS_READY:
         try:
             gc = _gc_client()
@@ -115,8 +99,7 @@ def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
             ws = sh.worksheet(tab_name)
             data = ws.get_all_records()
             df = pd.DataFrame(data)
-        except Exception as e:
-            # Si falla con SA, cae a CSV
+        except Exception:
             gid = str(gid_map.get(tab_name, "0"))
             df = _leer_csv_publico(sheet_id, gid)
     else:
@@ -126,24 +109,14 @@ def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # Normalización de nombres de columnas
     df.columns = [str(c).strip() for c in df.columns]
-
-    # Parseo flexible de fechas comunes del tablero
     for c in [
-        "fecha_reporte",
-        "fec_ingreso",
-        "fec_egreso",
-        "fec_inicio_sintomas",
-        "fec_toma_muestra",
-        "fecha_muestra_1","fecha_resultado_1",
-        "fecha_muestra_2","fecha_resultado_2",
-        "fecha_muestra_3","fecha_resultado_3",
-        "fecha_muestra_4","fecha_resultado_4",
+        "fecha_reporte","fec_ingreso","fec_egreso","fec_inicio_sintomas","fec_toma_muestra",
+        "fecha_muestra_1","fecha_resultado_1","fecha_muestra_2","fecha_resultado_2",
+        "fecha_muestra_3","fecha_resultado_3","fecha_muestra_4","fecha_resultado_4",
     ]:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True, infer_datetime_format=True)
-
     return df
 
 def get_vigilancia(gid_map: dict) -> pd.DataFrame:
@@ -153,7 +126,7 @@ def get_historico(gid_map: dict) -> pd.DataFrame:
     return _leer_tab(SHEET_ID, "Histórico", gid_map)
 
 # ======================================================
-#        Módulo: Riesgo IAAS por cama (SIN CAMBIOS)
+#        Módulo: Riesgo IAAS por cama (igual)
 # ======================================================
 def modulo_riesgo():
     st.subheader("🛏️ Mapa de Riesgo de IAAS por Cama")
@@ -177,8 +150,8 @@ def modulo_riesgo():
     df_final["porcentaje_iaas"] = df_final["porcentaje_iaas"].fillna(0)
 
     orden_pisos = [
-        "5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur",
-        "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A",
+        "5B Norte","5B Sur","4B Norte","4B Sur","3B Norte","3B Sur",
+        "2B Norte","2B Sur","UCI","UTR","TMO","4A","3A","2A","1A",
     ]
     df_final["piso"] = pd.Categorical(df_final["piso"], categories=orden_pisos, ordered=True)
 
@@ -187,25 +160,20 @@ def modulo_riesgo():
     df_piso["porcentaje_iaas_str"] = df_piso["porcentaje_iaas"].map("{:.2f}%".format)
 
     fig = px.scatter(
-        df_piso,
-        x="coord_x",
-        y="coord_y",
-        color="porcentaje_iaas",
+        df_piso, x="coord_x", y="coord_y", color="porcentaje_iaas",
         color_continuous_scale=[(0.0, "green"), (0.5, "orange"), (1.0, "red")],
-        range_color=(0, 100),
-        text="cama",
-        labels={"coord_x": "Coordenada X", "coord_y": "Coordenada Y", "porcentaje_iaas": "% IAAS"},
+        range_color=(0, 100), text="cama",
+        labels={"coord_x": "Coordenada X","coord_y":"Coordenada Y","porcentaje_iaas":"% IAAS"},
         hover_data={"cama": True, "porcentaje_iaas_str": True, "porcentaje_iaas": False},
         height=650,
     )
     fig.update_traces(marker=dict(size=25), textposition="top center")
     fig.update_layout(title=f"🛏️ Mapa de Riesgo – Piso {piso_sel}", title_font=dict(size=16), yaxis_autorange="reversed")
-
     st.plotly_chart(fig, use_container_width=True)
     st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
 # ======================================================
-#        Módulo: Vigilancia Activa (Drive + Histórico)
+#        Módulo: Vigilancia Activa
 # ======================================================
 def _es_paciente(df: pd.DataFrame) -> pd.Series:
     if "status_paciente" in df.columns:
@@ -217,7 +185,6 @@ def _iaas_num(df: pd.DataFrame, col="iaas_sino") -> pd.Series:
         return pd.to_numeric(df[col], errors="coerce").fillna(0)
     return pd.Series([0] * len(df), index=df.index)
 
-# --- Laboratorio desde Vigilancia (aplanado 1..4) ---
 def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     id_cols = [
         "piso","servicio","cama","nss","ap_paterno","ap_materno","nombre","sexo","edad","fec_ingreso"
@@ -241,12 +208,11 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
         tmp = df_src[id_cols + use_cols].copy()
         rename_map = {v: k for k, v in cols_i.items() if v in tmp.columns}
         tmp = tmp.rename(columns=rename_map)
-        for c in ["fecha_muestra", "fecha_resultado", "fec_ingreso"]:
+        for c in ["fecha_muestra","fecha_resultado","fec_ingreso"]:
             if c in tmp.columns:
                 tmp[c] = pd.to_datetime(tmp[c], errors="coerce", dayfirst=True, infer_datetime_format=True)
-        # Filtra filas sin información relevante
         has_info = False
-        for c in ["germen", "tipo_resultado", "tipo_muestra", "cultivo"]:
+        for c in ["germen","tipo_resultado","tipo_muestra","cultivo"]:
             if c in tmp.columns:
                 s = tmp[c].astype(str).str.strip().ne("")
                 has_info = s if has_info is False else (has_info | s)
@@ -268,7 +234,21 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
-    # --- NUEVO: panel para configurar gid por pestaña cuando se usa CSV ---
+    # Helper filtro por sector; si es "UMAE completa" no filtra
+    def filtra_por_sector(df: pd.DataFrame, sector: Optional[str]) -> pd.DataFrame:
+        if df is None or df.empty or not sector:
+            return df
+        if str(sector).strip().upper() in ["UMAE COMPLETA", "UMAE", "TODOS", "ALL"]:
+            return df
+        sector_str = str(sector).strip().upper()
+        candidatos = [c for c in ["piso","sector","servicio","planta","bloque"] if c in df.columns]
+        if not candidatos:
+            return df
+        col = candidatos[0]
+        serie = df[col].astype(str).str.strip().str.upper()
+        return df[serie == sector_str].copy()
+
+    # Panel de configuración (gid + modo)
     with st.expander("⚙️ Configuración de Google Sheets", expanded=False):
         st.caption("Si no hay credenciales, se usa CSV público. Ajusta aquí el gid por pestaña si tu hoja no es '0'.")
         gid_vig = st.text_input("gid de pestaña 'Vigilancia'", value=DEFAULT_SHEET_GID_MAP["Vigilancia"])
@@ -287,18 +267,17 @@ def modulo_vigilancia():
             else:
                 st.info(msg)
 
-    # Selector de planos (tu lógica existente)
-    planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")]
-    if not planos:
+    # Selector de sector con opción "UMAE completa"
+    planos_existentes = [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")]
+    opciones_sector = ["UMAE completa"] + (planos_existentes if planos_existentes else [])
+    if not planos_existentes:
         st.warning("No hay planos en 'data/planos'. Se mostrarán solo tablas y gráficas.")
-        plano_sel = None
-    else:
-        st.markdown("##### Selecciona el sector del hospital:")
-        col_sel, _ = st.columns([1.2, 3])
-        with col_sel:
-            plano_sel = st.selectbox("", options=planos, label_visibility="collapsed")
+    st.markdown("##### Selecciona el sector del hospital:")
+    col_sel, _ = st.columns([1.2, 3])
+    with col_sel:
+        plano_sel = st.selectbox("", options=opciones_sector, label_visibility="collapsed")
 
-    imagen_path = os.path.join("data/planos", f"{plano_sel}.png") if plano_sel else None
+    imagen_path = os.path.join("data/planos", f"{plano_sel}.png") if plano_sel != "UMAE completa" else None
 
     col1, col2 = st.columns([1, 4])
 
@@ -308,6 +287,7 @@ def modulo_vigilancia():
         mostrar_curva_captura   = st.checkbox("Captura en INOSO", value=False)
         mostrar_laboratorio     = st.checkbox("Laboratorio (desde Vigilancia)", value=False)
         mostrar_censo           = st.checkbox("Censo nominal de casos (en vivo)", value=False)
+        st.info(f"Vista: **{plano_sel}**")
 
         st.markdown("###")
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
@@ -315,61 +295,100 @@ def modulo_vigilancia():
     with col2:
         if imagen_path and os.path.exists(imagen_path):
             st.image(imagen_path, use_container_width=True, caption=f"Plano sector {plano_sel}")
-        elif plano_sel:
+        elif plano_sel != "UMAE completa" and planos_existentes:
             st.warning("⚠️ No se encontró el plano del sector.")
 
         # ------ Submódulos ------
         if mostrar_curva_epidemica:
-            st.subheader("📈 Curva Epidémica de IAAS (Histórico)")
+            st.subheader("📈 Curva Epidémica de IAAS")
             try:
-                df_hist = get_historico(gid_map)
+                df_hist = get_historico({"Histórico": gid_his, "Vigilancia": gid_vig})
                 if df_hist.empty or "fecha_reporte" not in df_hist.columns:
                     st.info("Histórico vacío o sin 'fecha_reporte'.")
                 else:
-                    tmp = df_hist.copy()
+                    tmp = filtra_por_sector(df_hist.copy(), plano_sel)
                     tmp["es_paciente"] = _es_paciente(tmp)
                     tmp["iaas_num"] = _iaas_num(tmp)
                     prev = (
                         tmp.groupby("fecha_reporte")
-                        .agg(total_hosp=("es_paciente", "sum"), iaas_activos=("iaas_num", "sum"))
+                        .agg(total_hosp=("es_paciente", "sum"),
+                             iaas_activos=("iaas_num", "sum"))
                         .assign(prevalencia=lambda d: d["iaas_activos"] / d["total_hosp"].replace(0, pd.NA))
+                        .reset_index()
                     )
-                    st.line_chart(prev[["prevalencia"]].dropna())
-                    st.caption("Prevalencia diaria (IAAS activos / hospitalizados).")
+                    # slider de rango de días
+                    dias = st.slider("Rango de días para la curva", 14, 180, 60)
+                    if pd.notna(prev["fecha_reporte"].max()):
+                        desde = prev["fecha_reporte"].max() - pd.Timedelta(days=dias)
+                        prev = prev[prev["fecha_reporte"] >= desde]
+                    st.line_chart(prev.set_index("fecha_reporte")[["prevalencia"]].dropna())
+                    st.caption(f"Prevalencia diaria (IAAS activos / hospitalizados) – Vista: {plano_sel}.")
             except Exception as e:
-                st.error(f"No se pudo leer 'Histórico': {e}")
+                st.error(f"No se pudo calcular la curva epidémica: {e}")
 
         if mostrar_curva_captura:
-            st.subheader("📊 Curva de Captura INOSO")
-            path_captura = "data/curva_captura.png"
-            if os.path.exists(path_captura):
-                st.image(path_captura, use_container_width=True)
-            else:
-                st.warning("No se encontró la imagen de la curva de captura INOSO.")
+            st.subheader("📊 Captura en INOSO (casos)")
+            try:
+                df_vig = get_vigilancia({"Vigilancia": gid_vig, "Histórico": gid_his})
+                if df_vig.empty:
+                    st.info("'Vigilancia' está vacía.")
+                else:
+                    df_vig = filtra_por_sector(df_vig.copy(), plano_sel)
+                    # Elegimos la mejor columna de fecha disponible
+                    fecha_cols = [c for c in [
+                        "fecha_reporte","fec_ingreso","fecha_muestra_1","fecha_resultado_1",
+                        "fecha_muestra_2","fecha_resultado_2","fecha_muestra_3","fecha_resultado_3",
+                        "fecha_muestra_4","fecha_resultado_4"
+                    ] if c in df_vig.columns]
+                    fecha_ref = fecha_cols[0] if fecha_cols else None
+                    if not fecha_ref:
+                        st.info("No hay columnas de fecha para graficar la captura.")
+                    else:
+                        # Solo pacientes válidos
+                        df_cap = df_vig[_es_paciente(df_vig)].copy()
+                        df_cap = df_cap[pd.notna(df_cap[fecha_ref])]
+                        # slider rango días
+                        dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap")
+                        fecha_max = df_cap[fecha_ref].max()
+                        if pd.notna(fecha_max):
+                            desde = fecha_max - pd.Timedelta(days=dias)
+                            df_cap = df_cap[df_cap[fecha_ref] >= desde]
+                        serie = df_cap.groupby(fecha_ref)[fecha_ref].count().rename("casos").reset_index()
+                        fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos":"Casos/día"})
+                        fig_cap.update_layout(xaxis_tickangle=-30)
+                        st.plotly_chart(fig_cap, use_container_width=True)
+                        st.caption(f"Conteo diario de registros en INOSO – Vista: {plano_sel}.")
+            except Exception as e:
+                st.error(f"No se pudo calcular la captura INOSO: {e}")
 
         if mostrar_laboratorio:
             st.subheader("🧪 Laboratorio (derivado de Vigilancia)")
             try:
-                df_vig = get_vigilancia(gid_map)
+                df_vig = get_vigilancia({"Vigilancia": gid_vig, "Histórico": gid_his})
                 if df_vig.empty:
                     st.info("'Vigilancia' está vacía.")
                 else:
+                    df_vig = filtra_por_sector(df_vig, plano_sel)  # filtra excepto UMAE completa
                     df_lab_long = lab_desde_vigilancia(df_vig)
                     if df_lab_long.empty:
-                        st.info("Sin registros de laboratorio en 'Vigilancia'.")
+                        msg = "Sin registros de laboratorio"
+                        msg += " en el sector seleccionado." if plano_sel != "UMAE completa" else " en la UMAE."
+                        st.info(msg)
                     else:
-                        # Filtro por últimos días, usa fecha_muestra si existe, si no fecha_resultado
                         fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab_long.columns else (
                             "fecha_resultado" if "fecha_resultado" in df_lab_long.columns else None
                         )
                         if fecha_ref:
-                            dias = st.slider("Rango de días a analizar", 7, 120, 30)
+                            dias = st.slider("Rango de días a analizar", 7, 120, 30, key="slider_lab")
                             fecha_max = df_lab_long[fecha_ref].max()
                             if pd.notna(fecha_max):
                                 desde = fecha_max - pd.Timedelta(days=dias)
                                 df_lab_long = df_lab_long[df_lab_long[fecha_ref] >= desde]
 
-                        st.metric("Registros de laboratorio", len(df_lab_long))
+                        st.metric(
+                            f"Registros de laboratorio ({'sector' if plano_sel!='UMAE completa' else 'UMAE completa'})",
+                            len(df_lab_long)
+                        )
 
                         if "germen" in df_lab_long.columns:
                             top = (
@@ -402,15 +421,23 @@ def modulo_vigilancia():
         if mostrar_censo:
             st.subheader("🗂️ Censo nominal de casos (en vivo)")
             try:
-                df_vivo = get_vigilancia(gid_map)
-                if df_vivo.empty:
+                df_vig = get_vigilancia({"Vigilancia": gid_vig, "Histórico": gid_his})
+                if df_vig.empty:
                     st.info("No hay datos en la pestaña 'Vigilancia'.")
                 else:
-                    df_censo = df_vivo[_es_paciente(df_vivo)].copy()
+                    df_vig = filtra_por_sector(df_vig, plano_sel)  # filtra excepto UMAE completa
+                    df_censo = df_vig[_es_paciente(df_vig)].copy()
+
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("Pacientes activos", len(df_censo))
+                    c1.metric(
+                        f"Pacientes activos ({'sector' if plano_sel!='UMAE completa' else 'UMAE completa'})",
+                        len(df_censo)
+                    )
                     if "iaas_sino" in df_censo.columns:
-                        c2.metric("IAAS activos", int(_iaas_num(df_censo).sum()))
+                        c2.metric(
+                            f"IAAS activos ({'sector' if plano_sel!='UMAE completa' else 'UMAE completa'})",
+                            int(_iaas_num(df_censo).sum())
+                        )
                     if "servicio" in df_censo.columns and not df_censo.empty:
                         top_srv = (
                             df_censo.groupby("servicio")["servicio"].count().sort_values(ascending=False).head(5)
