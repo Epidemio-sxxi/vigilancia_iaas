@@ -31,12 +31,20 @@ with col3:
     )
 
 # ======================================================
-#            Conexión a Google Sheets (robusta)
+#     Conexión a Google Sheets (Service Account + CSV)
 # ======================================================
+# ID por defecto (puedes sobreescribirlo en st.secrets["sheet_id"] o env REDIAAS_SHEET_ID)
 SHEET_ID = st.secrets.get(
     "sheet_id",
     os.environ.get("REDIAAS_SHEET_ID", "1dXRRepFI6l3t6kW6pZ3BJo1G63EESINCUOd6L98V9E0"),
 )
+
+# --- NUEVO: mapa de gid por pestaña para fallback CSV (edítalo si tus pestañas tienen otro gid) ---
+# Si no conoces el gid, abre la pestaña en Google Sheets y copia el número al final de la URL (gid=XXXXX).
+DEFAULT_SHEET_GID_MAP = {
+    "Vigilancia": st.secrets.get("gid_vigilancia", os.environ.get("REDIAAS_GID_VIGILANCIA", "0")),
+    "Histórico":  st.secrets.get("gid_historico",  os.environ.get("REDIAAS_GID_HISTORICO",  "0")),
+}
 
 GS_READY = False
 _gs_err: Optional[str] = None
@@ -87,15 +95,34 @@ except Exception as e1:
         _gs_err = f"OAuth error: {e1} | {e2}"
         GS_READY = False
 
+# --- NUEVO: lector CSV público (sin credenciales) ---
+def _leer_csv_publico(sheet_id: str, gid: str) -> pd.DataFrame:
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+    return pd.read_csv(url)
 
-@st.cache_data(ttl=60, show_spinner=False)
-def _leer_tab(sheet_id: str, tab_name: str) -> pd.DataFrame:
-    """Lee una pestaña de Google Sheets y normaliza columnas/fechas."""
-    gc = _gc_client()
-    sh = gc.open_by_key(sheet_id)
-    ws = sh.worksheet(tab_name)
-    data = ws.get_all_records()
-    df = pd.DataFrame(data)
+@st.cache_data(ttl=120, show_spinner=False)
+def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
+    """
+    Lee una pestaña del Google Sheet por nombre.
+    - Si hay Service Account (GS_READY=True): usa gspread.
+    - Si no, cae a CSV público usando gid_map[tab_name].
+    Normaliza columnas y parsea fechas comunes.
+    """
+    if GS_READY:
+        try:
+            gc = _gc_client()
+            sh = gc.open_by_key(sheet_id)
+            ws = sh.worksheet(tab_name)
+            data = ws.get_all_records()
+            df = pd.DataFrame(data)
+        except Exception as e:
+            # Si falla con SA, cae a CSV
+            gid = str(gid_map.get(tab_name, "0"))
+            df = _leer_csv_publico(sheet_id, gid)
+    else:
+        gid = str(gid_map.get(tab_name, "0"))
+        df = _leer_csv_publico(sheet_id, gid)
+
     if df.empty:
         return df
 
@@ -119,19 +146,15 @@ def _leer_tab(sheet_id: str, tab_name: str) -> pd.DataFrame:
 
     return df
 
+def get_vigilancia(gid_map: dict) -> pd.DataFrame:
+    return _leer_tab(SHEET_ID, "Vigilancia", gid_map)
 
-def get_vigilancia() -> pd.DataFrame:
-    return _leer_tab(SHEET_ID, "Vigilancia")
-
-
-def get_historico() -> pd.DataFrame:
-    return _leer_tab(SHEET_ID, "Histórico")
-
+def get_historico(gid_map: dict) -> pd.DataFrame:
+    return _leer_tab(SHEET_ID, "Histórico", gid_map)
 
 # ======================================================
 #        Módulo: Riesgo IAAS por cama (SIN CAMBIOS)
 # ======================================================
-
 def modulo_riesgo():
     st.subheader("🛏️ Mapa de Riesgo de IAAS por Cama")
 
@@ -181,23 +204,20 @@ def modulo_riesgo():
     st.plotly_chart(fig, use_container_width=True)
     st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
-
 # ======================================================
 #        Módulo: Vigilancia Activa (Drive + Histórico)
 # ======================================================
-
 def _es_paciente(df: pd.DataFrame) -> pd.Series:
     if "status_paciente" in df.columns:
         return df["status_paciente"].astype(str).str.lower() != "sin paciente"
     return pd.Series([True] * len(df), index=df.index)
-
 
 def _iaas_num(df: pd.DataFrame, col="iaas_sino") -> pd.Series:
     if col in df.columns:
         return pd.to_numeric(df[col], errors="coerce").fillna(0)
     return pd.Series([0] * len(df), index=df.index)
 
-# --- Nuevo: Laboratorio desde Vigilancia (aplanado 1..4) ---
+# --- Laboratorio desde Vigilancia (aplanado 1..4) ---
 def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     id_cols = [
         "piso","servicio","cama","nss","ap_paterno","ap_materno","nombre","sexo","edad","fec_ingreso"
@@ -245,22 +265,27 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     df_long = df_long[id_cols + ordered]
     return df_long
 
-
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
-    # Indicador de conexión a Google Sheets
-    with st.expander("Estado de conexión a Google Sheets", expanded=False):
+    # --- NUEVO: panel para configurar gid por pestaña cuando se usa CSV ---
+    with st.expander("⚙️ Configuración de Google Sheets", expanded=False):
+        st.caption("Si no hay credenciales, se usa CSV público. Ajusta aquí el gid por pestaña si tu hoja no es '0'.")
+        gid_vig = st.text_input("gid de pestaña 'Vigilancia'", value=DEFAULT_SHEET_GID_MAP["Vigilancia"])
+        gid_his = st.text_input("gid de pestaña 'Histórico'",  value=DEFAULT_SHEET_GID_MAP["Histórico"])
+        gid_map = {"Vigilancia": gid_vig, "Histórico": gid_his}
+
         if GS_READY:
             if st.secrets.get("gcp_service_account"):
-                st.success("Conexión preparada (credenciales cargadas). ID de hoja: " + SHEET_ID)
+                st.success(f"Conexión por Service Account lista. Sheet ID: {SHEET_ID}")
             else:
-                st.error("Faltan credenciales: st.secrets['gcp_service_account']")
+                st.warning("Service Account habilitada pero sin JSON en secrets.")
         else:
-            st.error("Google Sheets no listo. " + (f"Detalle: {_gs_err}" if _gs_err else ""))
-            st.info(
-                "Sube el JSON del Service Account a st.secrets como 'gcp_service_account' y comparte la hoja con ese correo."
-            )
+            msg = "Usando modo CSV público (sin credenciales). Asegúrate que el Sheet esté en 'Cualquiera con el enlace: Lector'."
+            if _gs_err:
+                st.info(msg + f" | Detalle: {_gs_err}")
+            else:
+                st.info(msg)
 
     # Selector de planos (tu lógica existente)
     planos = [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")]
@@ -296,26 +321,23 @@ def modulo_vigilancia():
         # ------ Submódulos ------
         if mostrar_curva_epidemica:
             st.subheader("📈 Curva Epidémica de IAAS (Histórico)")
-            if not GS_READY:
-                st.warning("Conecta Google Sheets (sube credenciales y comparte la hoja) para mostrar la curva.")
-            else:
-                try:
-                    df_hist = get_historico()
-                    if df_hist.empty or "fecha_reporte" not in df_hist.columns:
-                        st.info("Histórico vacío o sin 'fecha_reporte'.")
-                    else:
-                        tmp = df_hist.copy()
-                        tmp["es_paciente"] = _es_paciente(tmp)
-                        tmp["iaas_num"] = _iaas_num(tmp)
-                        prev = (
-                            tmp.groupby("fecha_reporte")
-                            .agg(total_hosp=("es_paciente", "sum"), iaas_activos=("iaas_num", "sum"))
-                            .assign(prevalencia=lambda d: d["iaas_activos"] / d["total_hosp"].replace(0, pd.NA))
-                        )
-                        st.line_chart(prev[["prevalencia"]].dropna())
-                        st.caption("Prevalencia diaria (IAAS activos / hospitalizados).")
-                except Exception as e:
-                    st.error(f"No se pudo leer 'Histórico': {e}")
+            try:
+                df_hist = get_historico(gid_map)
+                if df_hist.empty or "fecha_reporte" not in df_hist.columns:
+                    st.info("Histórico vacío o sin 'fecha_reporte'.")
+                else:
+                    tmp = df_hist.copy()
+                    tmp["es_paciente"] = _es_paciente(tmp)
+                    tmp["iaas_num"] = _iaas_num(tmp)
+                    prev = (
+                        tmp.groupby("fecha_reporte")
+                        .agg(total_hosp=("es_paciente", "sum"), iaas_activos=("iaas_num", "sum"))
+                        .assign(prevalencia=lambda d: d["iaas_activos"] / d["total_hosp"].replace(0, pd.NA))
+                    )
+                    st.line_chart(prev[["prevalencia"]].dropna())
+                    st.caption("Prevalencia diaria (IAAS activos / hospitalizados).")
+            except Exception as e:
+                st.error(f"No se pudo leer 'Histórico': {e}")
 
         if mostrar_curva_captura:
             st.subheader("📊 Curva de Captura INOSO")
@@ -327,84 +349,77 @@ def modulo_vigilancia():
 
         if mostrar_laboratorio:
             st.subheader("🧪 Laboratorio (derivado de Vigilancia)")
-            if not GS_READY:
-                st.warning("Conecta Google Sheets para mostrar laboratorio.")
-            else:
-                try:
-                    df_vig = get_vigilancia()
-                    if df_vig.empty:
-                        st.info("'Vigilancia' está vacía.")
+            try:
+                df_vig = get_vigilancia(gid_map)
+                if df_vig.empty:
+                    st.info("'Vigilancia' está vacía.")
+                else:
+                    df_lab_long = lab_desde_vigilancia(df_vig)
+                    if df_lab_long.empty:
+                        st.info("Sin registros de laboratorio en 'Vigilancia'.")
                     else:
-                        df_lab_long = lab_desde_vigilancia(df_vig)
-                        if df_lab_long.empty:
-                            st.info("Sin registros de laboratorio en 'Vigilancia'.")
-                        else:
-                            # Filtro por últimos días, usa fecha_muestra si existe, si no fecha_resultado
-                            fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab_long.columns else (
-                                "fecha_resultado" if "fecha_resultado" in df_lab_long.columns else None
+                        # Filtro por últimos días, usa fecha_muestra si existe, si no fecha_resultado
+                        fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab_long.columns else (
+                            "fecha_resultado" if "fecha_resultado" in df_lab_long.columns else None
+                        )
+                        if fecha_ref:
+                            dias = st.slider("Rango de días a analizar", 7, 120, 30)
+                            fecha_max = df_lab_long[fecha_ref].max()
+                            if pd.notna(fecha_max):
+                                desde = fecha_max - pd.Timedelta(days=dias)
+                                df_lab_long = df_lab_long[df_lab_long[fecha_ref] >= desde]
+
+                        st.metric("Registros de laboratorio", len(df_lab_long))
+
+                        if "germen" in df_lab_long.columns:
+                            top = (
+                                df_lab_long["germen"].astype(str).str.strip()
+                                .replace({"nan": pd.NA, "": pd.NA}).dropna()
+                                .value_counts().head(10).reset_index()
                             )
-                            if fecha_ref:
-                                dias = st.slider("Rango de días a analizar", 7, 120, 30)
-                                fecha_max = df_lab_long[fecha_ref].max()
-                                if pd.notna(fecha_max):
-                                    desde = fecha_max - pd.Timedelta(days=dias)
-                                    df_lab_long = df_lab_long[df_lab_long[fecha_ref] >= desde]
+                            top.columns = ["Microorganismo", "Casos"]
+                            if not top.empty:
+                                fig_top = px.bar(top, x="Microorganismo", y="Casos")
+                                fig_top.update_layout(xaxis_tickangle=-30)
+                                st.plotly_chart(fig_top, use_container_width=True)
 
-                            st.metric("Registros de laboratorio", len(df_lab_long))
+                        if "tipo_muestra" in df_lab_long.columns:
+                            por_muestra = (
+                                df_lab_long["tipo_muestra"].astype(str).str.strip()
+                                .replace({"nan": pd.NA, "": pd.NA}).dropna()
+                                .value_counts().reset_index()
+                            )
+                            por_muestra.columns = ["Tipo de muestra", "Registros"]
+                            if not por_muestra.empty:
+                                fig_m = px.bar(por_muestra, x="Tipo de muestra", y="Registros")
+                                fig_m.update_layout(xaxis_tickangle=-30)
+                                st.plotly_chart(fig_m, use_container_width=True)
 
-                            if "germen" in df_lab_long.columns:
-                                top = (
-                                    df_lab_long["germen"].astype(str).str.strip()
-                                    .replace({"nan": pd.NA, "": pd.NA}).dropna()
-                                    .value_counts().head(10).reset_index()
-                                )
-                                top.columns = ["Microorganismo", "Casos"]
-                                if not top.empty:
-                                    fig_top = px.bar(top, x="Microorganismo", y="Casos")
-                                    fig_top.update_layout(xaxis_tickangle=-30)
-                                    st.plotly_chart(fig_top, use_container_width=True)
-
-                            if "tipo_muestra" in df_lab_long.columns:
-                                por_muestra = (
-                                    df_lab_long["tipo_muestra"].astype(str).str.strip()
-                                    .replace({"nan": pd.NA, "": pd.NA}).dropna()
-                                    .value_counts().reset_index()
-                                )
-                                por_muestra.columns = ["Tipo de muestra", "Registros"]
-                                if not por_muestra.empty:
-                                    fig_m = px.bar(por_muestra, x="Tipo de muestra", y="Registros")
-                                    fig_m.update_layout(xaxis_tickangle=-30)
-                                    st.plotly_chart(fig_m, use_container_width=True)
-
-                            st.dataframe(df_lab_long, use_container_width=True)
-                except Exception as e:
-                    st.error(f"No se pudo leer laboratorio desde 'Vigilancia': {e}")
+                        st.dataframe(df_lab_long, use_container_width=True)
+            except Exception as e:
+                st.error(f"No se pudo leer laboratorio desde 'Vigilancia': {e}")
 
         if mostrar_censo:
             st.subheader("🗂️ Censo nominal de casos (en vivo)")
-            if not GS_READY:
-                st.warning("Conecta Google Sheets (gspread + credenciales) para mostrar el censo en vivo.")
-            else:
-                try:
-                    df_vivo = get_vigilancia()
-                    if df_vivo.empty:
-                        st.info("No hay datos en la pestaña 'Vigilancia'.")
-                    else:
-                        df_censo = df_vivo[_es_paciente(df_vivo)].copy()
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Pacientes activos", len(df_censo))
-                        if "iaas_sino" in df_censo.columns:
-                            c2.metric("IAAS activos", int(_iaas_num(df_censo).sum()))
-                        if "servicio" in df_censo.columns and not df_censo.empty:
-                            top_srv = (
-                                df_censo.groupby("servicio")["servicio"].count().sort_values(ascending=False).head(5)
-                            )
-                            c3.write("Servicios con más pacientes (Top 5):")
-                            c3.write(top_srv)
-                        st.dataframe(df_censo, use_container_width=True)
-                except Exception as e:
-                    st.error(f"No se pudo leer 'Vigilancia': {e}")
-
+            try:
+                df_vivo = get_vigilancia(gid_map)
+                if df_vivo.empty:
+                    st.info("No hay datos en la pestaña 'Vigilancia'.")
+                else:
+                    df_censo = df_vivo[_es_paciente(df_vivo)].copy()
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Pacientes activos", len(df_censo))
+                    if "iaas_sino" in df_censo.columns:
+                        c2.metric("IAAS activos", int(_iaas_num(df_censo).sum()))
+                    if "servicio" in df_censo.columns and not df_censo.empty:
+                        top_srv = (
+                            df_censo.groupby("servicio")["servicio"].count().sort_values(ascending=False).head(5)
+                        )
+                        c3.write("Servicios con más pacientes (Top 5):")
+                        c3.write(top_srv)
+                    st.dataframe(df_censo, use_container_width=True)
+            except Exception as e:
+                st.error(f"No se pudo leer 'Vigilancia': {e}")
 
 # ---------------- Menú principal ----------------
 if "menu" not in st.session_state:
