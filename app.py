@@ -247,6 +247,20 @@ def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
     df2["__piso_norm"] = df2["piso"].map(_norm_piso)
     return df2[df2["__piso_norm"] == _norm_piso(seleccion)].drop(columns="__piso_norm")
 
+# --- Tarjeta bonita (estilo CVE) ---
+def stat_card(value: int, label: str, color_bg: str, icon: str):
+    html = f"""
+    <div style="background:{color_bg}; border-radius:14px; padding:16px 18px; color:white;
+                box-shadow:0 6px 18px rgba(0,0,0,.20);">
+        <div style="font-size:34px; font-weight:800; line-height:1">{value:,}</div>
+        <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
+            <span style="font-size:22px">{icon}</span>
+            <span style="font-size:15px; opacity:.95">{label}</span>
+        </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
@@ -434,25 +448,48 @@ def modulo_vigilancia():
                 if df_vig.empty:
                     st.info("No hay datos en la pestaña 'Vigilancia'.")
                 else:
+                    # --- Filtrado por 'piso' ---
                     df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric(
-                        f"Pacientes activos ({'sector' if _norm_piso(plano_sel)!='UMAE COMPLETA' else 'UMAE completa'})",
-                        len(df_censo)
-                    )
-                    if "iaas_sino" in df_censo.columns:
-                        c2.metric(
-                            f"IAAS activos ({'sector' if _norm_piso(plano_sel)!='UMAE COMPLETA' else 'UMAE completa'})",
-                            int(_iaas_num(df_censo).sum())
+                    # --- Conteos para tarjetas estilo CVE ---
+                    total_pac = int(len(df_censo))
+                    iaas_cnt  = int(_iaas_num(df_censo).sum()) if "iaas_sino" in df_censo.columns else 0
+                    # Cultivos / Microorganismos a partir de la misma vigilancia filtrada
+                    _lab = lab_desde_vigilancia(df_vig)
+                    cultivos_cnt = int(len(_lab)) if not _lab.empty else 0
+                    if not _lab.empty and "germen" in _lab.columns:
+                        micro_cnt = int(
+                            _lab["germen"].astype(str).str.strip().replace({"": pd.NA, "nan": pd.NA}).dropna().nunique()
                         )
+                    else:
+                        micro_cnt = 0
+
+                    # --- Tarjetas coloreadas ---
+                    cA, cB, cC, cD = st.columns(4)
+                    with cA:
+                        stat_card(total_pac, "Total de pacientes", "#6C63FF", "📝")
+                    with cB:
+                        stat_card(iaas_cnt, "IAAS", "#2ECC71", "🩺")
+                    with cC:
+                        stat_card(cultivos_cnt, "Cultivos", "#1E90FF", "🧪")
+                    with cD:
+                        stat_card(micro_cnt, "Microorganismos", "#F39C12", "🔬")
+
+                    st.markdown("### ")
+                    # --- Top 5 servicios ---
                     if "servicio" in df_censo.columns and not df_censo.empty:
+                        st.markdown("**Servicios con más pacientes (Top 5):**")
                         top_srv = (
-                            df_censo.groupby("servicio")["servicio"].count().sort_values(ascending=False).head(5)
+                            df_censo.groupby("servicio")["servicio"].count()
+                            .sort_values(ascending=False).head(5).reset_index(name="pacientes")
                         )
-                        c3.write("Servicios con más pacientes (Top 5):")
-                        c3.write(top_srv)
+                        st.dataframe(top_srv, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No hay columna 'servicio' para mostrar el Top 5.")
+
+                    # --- Tabla nominal completa filtrada ---
+                    st.markdown("### ")
                     st.dataframe(df_censo, use_container_width=True)
             except Exception as e:
                 st.error(f"No se pudo leer 'Vigilancia': {e}")
