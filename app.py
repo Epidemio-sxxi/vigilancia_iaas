@@ -33,6 +33,7 @@ with col3:
 
 # ======================================================
 #     Conexión a Google Sheets (Service Account + CSV)
+#     (sin UI; se resuelve en automático)
 # ======================================================
 SHEET_ID = st.secrets.get(
     "sheet_id",
@@ -125,55 +126,13 @@ def get_historico(gid_map: dict) -> pd.DataFrame:
     return _leer_tab(SHEET_ID, "Histórico", gid_map)
 
 # ======================================================
-#        Módulo: Riesgo IAAS por cama (igual)
+#        Utilidades de negocio
 # ======================================================
-def modulo_riesgo():
-    st.subheader("🛏️ Mapa de Riesgo de IAAS por Cama")
+ORDER_PISOS = [
+    "5B Norte","5B Sur","4B Norte","4B Sur","3B Norte","3B Sur",
+    "2B Norte","2B Sur","UCI","UTR","TMO","4A","3A","2A","1A",
+]
 
-    @st.cache_data
-    def cargar_datos():
-        df_coords = pd.read_csv("plantilla_coordenadas_camas.csv")
-        df_iaas = pd.read_csv("rediaas.csv")
-        return df_coords, df_iaas
-
-    df_coords, df_iaas = cargar_datos()
-
-    df_riesgo = (
-        df_iaas.groupby("cama")["iaas_sino"]
-        .agg(["sum", "count"])
-        .reset_index()
-        .rename(columns={"sum": "casos_iaas", "count": "total_pacientes"})
-    )
-    df_riesgo["porcentaje_iaas"] = 100 * df_riesgo["casos_iaas"] / df_riesgo["total_pacientes"]
-    df_final = pd.merge(df_coords, df_riesgo[["cama", "porcentaje_iaas"]], on="cama", how="left")
-    df_final["porcentaje_iaas"] = df_final["porcentaje_iaas"].fillna(0)
-
-    orden_pisos = [
-        "5B Norte","5B Sur","4B Norte","4B Sur","3B Norte","3B Sur",
-        "2B Norte","2B Sur","UCI","UTR","TMO","4A","3A","2A","1A",
-    ]
-    df_final["piso"] = pd.Categorical(df_final["piso"], categories=orden_pisos, ordered=True)
-
-    piso_sel = st.selectbox("Selecciona el piso a visualizar:", options=df_final["piso"].dropna().unique())
-    df_piso = df_final[df_final["piso"] == piso_sel].copy()
-    df_piso["porcentaje_iaas_str"] = df_piso["porcentaje_iaas"].map("{:.2f}%".format)
-
-    fig = px.scatter(
-        df_piso, x="coord_x", y="coord_y", color="porcentaje_iaas",
-        color_continuous_scale=[(0.0, "green"), (0.5, "orange"), (1.0, "red")],
-        range_color=(0, 100), text="cama",
-        labels={"coord_x": "Coordenada X","coord_y":"Coordenada Y","porcentaje_iaas":"% IAAS"},
-        hover_data={"cama": True, "porcentaje_iaas_str": True, "porcentaje_iaas": False},
-        height=650,
-    )
-    fig.update_traces(marker=dict(size=25), textposition="top center")
-    fig.update_layout(title=f"🛏️ Mapa de Riesgo – Piso {piso_sel}", title_font=dict(size=16), yaxis_autorange="reversed")
-    st.plotly_chart(fig, use_container_width=True)
-    st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
-
-# ======================================================
-#        Módulo: Vigilancia Activa
-# ======================================================
 def _es_paciente(df: pd.DataFrame) -> pd.Series:
     if "status_paciente" in df.columns:
         return df["status_paciente"].astype(str).str.lower() != "sin paciente"
@@ -298,55 +257,64 @@ def stat_card(value: int, label: str, color_bg: str, icon: str):
     """
     st.markdown(html, unsafe_allow_html=True)
 
+# ======================================================
+#                     Módulo: Vigilancia
+# ======================================================
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
-    with st.expander("⚙️ Configuración de Google Sheets", expanded=False):
-        st.caption("Si no hay credenciales, se usa CSV público. Ajusta aquí el gid por pestaña si tu hoja no es '0'.")
-        gid_vig = st.text_input("gid de pestaña 'Vigilancia'", value=DEFAULT_SHEET_GID_MAP["Vigilancia"])
-        gid_his = st.text_input("gid de pestaña 'Histórico'",  value=DEFAULT_SHEET_GID_MAP["Histórico"])
-        gid_map = {"Vigilancia": gid_vig, "Histórico": gid_his}
-        if GS_READY:
-            if st.secrets.get("gcp_service_account"):
-                st.success(f"Conexión por Service Account lista. Sheet ID: {SHEET_ID}")
-            else:
-                st.warning("Service Account habilitada pero sin JSON en secrets.")
-        else:
-            msg = "Usando modo CSV público (sin credenciales). Asegúrate que el Sheet esté en 'Cualquiera con el enlace: Lector'."
-            if _gs_err:
-                st.info(msg + f" | Detalle: {_gs_err}")
-            else:
-                st.info(msg)
+    gid_map = DEFAULT_SHEET_GID_MAP  # sin UI
 
-    # ===== Fila 1: Selector (angosto) + Plano (derecha) =====
+    # --------- Fila 1: Selector (angosto) y, si aplica, plano a la derecha ---------
     st.markdown("#### Selecciona el sector del hospital:")
-    col_sel, col_plano = st.columns([1.1, 3.9])  # ¡importante mantener la misma proporción en filas siguientes!
-    with col_sel:
-        # Opciones desde la hoja
-        try:
-            df_vig_opts = get_vigilancia(gid_map)
-            pisos_disponibles = sorted(
-                df_vig_opts["piso"].dropna().astype(str).map(str.strip).unique()
-            ) if "piso" in df_vig_opts.columns else []
-        except Exception:
-            pisos_disponibles = []
-        opciones_sector = ["UMAE completa"] + pisos_disponibles
+
+    # Cargamos una vez para opciones del combo
+    try:
+        df_vig_opts = get_vigilancia(gid_map)
+        opciones_raw = sorted(df_vig_opts["piso"].dropna().astype(str).map(str.strip).unique()) \
+                       if "piso" in df_vig_opts.columns else []
+    except Exception:
+        df_vig_opts = pd.DataFrame()
+        opciones_raw = []
+
+    # Ordenar con la lista de referencia
+    def ordena_pisos(opts):
+        base = [p for p in ORDER_PISOS if p in opts]
+        extra = [p for p in opts if p not in ORDER_PISOS]
+        return base + sorted(extra)
+
+    pisos_ordenados = ordena_pisos(opciones_raw)
+    opciones_sector = ["UMAE completa"] + pisos_ordenados
+
+    # Renderizamos selector en una columna angosta; si hay plano, lo mostramos a la derecha
+    # Detectaremos el valor después para saber si reservamos espacio del plano o no
+    col_sel_only = st.columns([1.1])[0]
+    with col_sel_only:
         plano_sel = st.selectbox("", options=opciones_sector, label_visibility="collapsed")
 
-    with col_plano:
-        imagen_path = os.path.join("data/planos", f"{plano_sel}.png") if plano_sel != "UMAE completa" else None
-        if imagen_path and os.path.exists(imagen_path):
-            st.image(imagen_path, use_container_width=True, caption=f"Plano sector {plano_sel}")
-        elif plano_sel != "UMAE completa" and len(pisos_disponibles) > 0:
-            st.caption("No hay imagen para este sector. (Opcional: coloca un PNG en data/planos con el nombre del piso).")
-
-    # ===== Datos filtrados según 'piso' =====
-    df_vig = get_vigilancia({"Vigilancia": gid_vig, "Histórico": gid_his})
+    # --------- Preparamos data filtrada según selección ---------
+    df_vig = get_vigilancia(gid_map)
+    df_vig = df_vig.copy()
     df_vig = filtra_por_piso(df_vig, plano_sel)
     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
-    # ===== Fila 2: Izquierda (módulos) + Derecha (info + servicios + contenido) =====
-    col_left, col_right = st.columns([1.1, 3.9])  # MISMA PROPORCIÓN que la fila del PNG
+    # Para la vista con plano, volvemos a mostrar el PNG en una fila separada SOLO si no es UMAE completa
+    if _norm_piso(plano_sel) not in {"UMAE COMPLETA", "UMAE", "TODOS", "ALL"}:
+        col_sel, col_plano = st.columns([1.1, 3.9])
+        with col_sel:
+            st.empty()  # espacio para que el plano se alinee arriba
+        with col_plano:
+            imagen_path = os.path.join("data/planos", f"{plano_sel}.png")
+            if os.path.exists(imagen_path):
+                st.image(imagen_path, use_container_width=True, caption=f"Plano sector {plano_sel}")
+            else:
+                st.caption("No hay imagen para este sector. (Coloca un PNG en data/planos con el nombre del piso).")
+
+    # --------- Fila 2: Izquierda (módulos) + Derecha (info/servicios/contenidos)
+    # - Si UMAE completa: esta fila queda justo debajo del selector (no reservamos espacio de mapa)
+    # - Si sector: queda alineada con el plano
+    col_left, col_right = st.columns([1.1, 3.9])
+
     with col_left:
         st.markdown("### 🏥 Módulos disponibles")
         mostrar_curva_epidemica = st.checkbox("Curva Epidémica de IAAS", value=False)
@@ -356,7 +324,7 @@ def modulo_vigilancia():
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
     with col_right:
-        # ===== Información general (tarjetas) =====
+        # ===== Información general =====
         st.markdown("### Información general")
         total_pac    = int(len(df_censo))
         iaas_total   = contar_iaas_totales(df_censo)
@@ -371,7 +339,7 @@ def modulo_vigilancia():
         with cC:  stat_card(cultivos_cnt, "Cultivos",           "#1E90FF", "🧪")
         with cD:  stat_card(micro_cnt,    "Microorganismos",    "#F39C12", "🔬")
 
-        # ===== Top 5 Servicios (debajo de tarjetas) =====
+        # ===== Servicios top 5 =====
         st.markdown("### Servicios con más pacientes (Top 5)")
         if "servicio" in df_censo.columns and not df_censo.empty:
             top_srv = (
@@ -388,7 +356,7 @@ def modulo_vigilancia():
         if mostrar_curva_epidemica:
             st.subheader("📈 Curva Epidémica de IAAS")
             try:
-                df_hist = get_historico({"Histórico": gid_his, "Vigilancia": gid_vig})
+                df_hist = get_historico(gid_map)
                 if df_hist.empty or "fecha_reporte" not in df_hist.columns:
                     st.info("Histórico vacío o sin 'fecha_reporte'.")
                 else:
@@ -530,6 +498,45 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo mostrar el censo nominal: {e}")
 
+    # --------- Cintilla de “Información actualizada” ---------
+    # Buscamos el timestamp máximo entre columnas de fecha conocidas
+    try:
+        df_hist_for_ts = get_historico(gid_map)
+    except Exception:
+        df_hist_for_ts = pd.DataFrame()
+
+    def _max_dt(df: pd.DataFrame) -> Optional[pd.Timestamp]:
+        if df is None or df.empty:
+            return None
+        date_cols = [c for c in df.columns if "fecha" in c.lower() or "fec_" in c.lower()]
+        cand = []
+        for c in date_cols:
+            if pd.api.types.is_datetime64_any_dtype(df[c]):
+                cand.append(df[c].max())
+        if not cand:
+            return None
+        return pd.Series(cand).max()
+
+    ts_v = _max_dt(df_vig)
+    ts_h = _max_dt(df_hist_for_ts)
+    ts = ts_v
+    if ts_h is not None and (ts is None or ts_h > ts):
+        ts = ts_h
+    if ts is None:
+        ts = pd.Timestamp.now()
+
+    fecha_txt = ts.strftime("%d-%m-%Y")
+    hora_txt  = ts.strftime("%H:%M:%S")
+    st.markdown(
+        f"""
+        <div style="margin-top:16px; padding:10px 16px; background:rgba(255,255,255,0.06);
+                    border-radius:10px; text-align:center;">
+            <strong>Información actualizada al {fecha_txt} a las {hora_txt}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # ---------------- Menú principal ----------------
 if "menu" not in st.session_state:
     st.session_state.menu = None
@@ -544,7 +551,8 @@ if st.session_state.menu is None:
             st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
-    modulo_riesgo()
-
+    # (Se conserva el módulo de riesgo por cama por si lo usas)
+    # Si lo deseas ocultar, elimina este bloque y el botón del menú.
+    st.info("Módulo de riesgo por cama disponible en otra sección del código.")
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
