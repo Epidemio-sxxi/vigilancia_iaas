@@ -39,7 +39,6 @@ SHEET_ID = st.secrets.get(
     os.environ.get("REDIAAS_SHEET_ID", "1dXRRepFI6l3t6kW6pZ3BJo1G63EESINCUOd6L98V9E0"),
 )
 
-# map de gid para fallback CSV (ajústalo si tus pestañas no son gid=0)
 DEFAULT_SHEET_GID_MAP = {
     "Vigilancia": st.secrets.get("gid_vigilancia", os.environ.get("REDIAAS_GID_VIGILANCIA", "0")),
     "Histórico":  st.secrets.get("gid_historico",  os.environ.get("REDIAAS_GID_HISTORICO",  "0")),
@@ -54,7 +53,6 @@ def _get_sa_info():
         raise RuntimeError("Falta st.secrets['gcp_service_account'] (JSON del Service Account)")
     return sa
 
-# Intento 1: gspread + google.oauth2
 try:
     import gspread
     from google.oauth2.service_account import Credentials as GA_Credentials
@@ -186,7 +184,7 @@ def _iaas_num(df: pd.DataFrame, col="iaas_sino") -> pd.Series:
         return pd.to_numeric(df[col], errors="coerce").fillna(0)
     return pd.Series([0] * len(df), index=df.index)
 
-# ---------- Helpers de cultivos/microorganismos (CORREGIDOS) ----------
+# ---------- Helpers comunes ----------
 def _strip_accents(text: str) -> str:
     return ''.join(ch for ch in unicodedata.normalize('NFKD', text) if not unicodedata.combining(ch))
 
@@ -197,6 +195,29 @@ def _es_si(val) -> bool:
     s = str(val).strip().lower()
     s = _strip_accents(s)  # 'sí' -> 'si'
     return s in {"si", "s", "true", "1"}
+
+def _iaas_cols(df: pd.DataFrame):
+    """Devuelve las columnas existentes que correspondan a iaas_1..iaas_4 (case-insensible)."""
+    wanted = {"iaas_1","iaas_2","iaas_3","iaas_4"}
+    return [c for c in df.columns if c.lower() in wanted]
+
+def contar_iaas_totales(df: pd.DataFrame) -> int:
+    """Suma total de IAAS en iaas_1..iaas_4 (cada 'Si' cuenta 1)."""
+    cols = _iaas_cols(df)
+    if not cols:
+        return 0
+    total = 0
+    for c in cols:
+        total += df[c].map(_es_si).astype(int).sum()
+    return int(total)
+
+def contar_pacientes_con_iaas(df: pd.DataFrame) -> int:
+    """Pacientes con al menos una IAAS (iaas_1..iaas_4 == 'Si')."""
+    cols = _iaas_cols(df)
+    if not cols:
+        return 0
+    any_si = df[cols].applymap(_es_si).any(axis=1)
+    return int(any_si.sum())
 
 def contar_cultivos_si(df: pd.DataFrame) -> int:
     """Cuenta ocurrencias 'Si' en cultivo_1..cultivo_4."""
@@ -249,7 +270,7 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
         for c in ["fecha_muestra","fecha_resultado","fec_ingreso"]:
             if c in tmp.columns:
                 tmp[c] = pd.to_datetime(tmp[c], errors="coerce", dayfirst=True, infer_datetime_format=True)
-        # Filtrar filas sin información mínima
+        # Filtro básico de información útil
         has_info = False
         for c in ["germen","tipo_resultado","tipo_muestra","cultivo"]:
             if c in tmp.columns:
@@ -286,7 +307,7 @@ def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
     df2["__piso_norm"] = df2["piso"].map(_norm_piso)
     return df2[df2["__piso_norm"] == _norm_piso(seleccion)].drop(columns="__piso_norm")
 
-# --- Tarjeta bonita (estilo CVE) ---
+# --- Tarjeta bonita ---
 def stat_card(value: int, label: str, color_bg: str, icon: str):
     html = f"""
     <div style="background:{color_bg}; border-radius:14px; padding:16px 18px; color:white;
@@ -303,13 +324,12 @@ def stat_card(value: int, label: str, color_bg: str, icon: str):
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
-    # Panel de configuración (gid + modo)
+    # Config
     with st.expander("⚙️ Configuración de Google Sheets", expanded=False):
         st.caption("Si no hay credenciales, se usa CSV público. Ajusta aquí el gid por pestaña si tu hoja no es '0'.")
         gid_vig = st.text_input("gid de pestaña 'Vigilancia'", value=DEFAULT_SHEET_GID_MAP["Vigilancia"])
         gid_his = st.text_input("gid de pestaña 'Histórico'",  value=DEFAULT_SHEET_GID_MAP["Histórico"])
         gid_map = {"Vigilancia": gid_vig, "Histórico": gid_his}
-
         if GS_READY:
             if st.secrets.get("gcp_service_account"):
                 st.success(f"Conexión por Service Account lista. Sheet ID: {SHEET_ID}")
@@ -322,7 +342,7 @@ def modulo_vigilancia():
             else:
                 st.info(msg)
 
-    # --- Obtener Vigilia para armar el selector de 'piso' desde la hoja ---
+    # Opciones de piso desde hoja
     try:
         df_vig_for_opts = get_vigilancia(gid_map)
         if "piso" in df_vig_for_opts.columns:
@@ -334,14 +354,12 @@ def modulo_vigilancia():
     except Exception:
         pisos_disponibles = []
 
-    # Selector con "UMAE completa" + pisos de la hoja
     opciones_sector = ["UMAE completa"] + pisos_disponibles
     st.markdown("##### Selecciona el sector del hospital:")
     col_sel, _ = st.columns([1.2, 3])
     with col_sel:
         plano_sel = st.selectbox("", options=opciones_sector, label_visibility="collapsed")
 
-    # Mostrar plano si existe imagen con ese nombre (excepto UMAE)
     imagen_path = os.path.join("data/planos", f"{plano_sel}.png") if plano_sel != "UMAE completa" else None
 
     col1, col2 = st.columns([1, 4])
@@ -353,7 +371,6 @@ def modulo_vigilancia():
         mostrar_laboratorio     = st.checkbox("Laboratorio (desde Vigilancia)", value=False)
         mostrar_censo           = st.checkbox("Censo nominal de casos (en vivo)", value=False)
         st.info(f"Vista: **{plano_sel}**")
-
         st.markdown("###")
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
@@ -373,7 +390,7 @@ def modulo_vigilancia():
                 else:
                     tmp = filtra_por_piso(df_hist.copy(), plano_sel)
                     tmp["es_paciente"] = _es_paciente(tmp)
-                    tmp["iaas_num"] = _iaas_num(tmp)
+                    tmp["iaas_num"] = _iaas_num(tmp)  # se mantiene como estaba
                     prev = (
                         tmp.groupby("fecha_reporte")
                         .agg(total_hosp=("es_paciente", "sum"),
@@ -398,7 +415,6 @@ def modulo_vigilancia():
                     st.info("'Vigilancia' está vacía.")
                 else:
                     df_vig = filtra_por_piso(df_vig.copy(), plano_sel)
-                    # columna de fecha preferida para captura
                     fecha_cols = [c for c in [
                         "fecha_reporte","fec_ingreso","fecha_muestra_1","fecha_resultado_1",
                         "fecha_muestra_2","fecha_resultado_2","fecha_muestra_3","fecha_resultado_3",
@@ -432,7 +448,7 @@ def modulo_vigilancia():
                 else:
                     df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_lab_long = lab_desde_vigilancia(df_vig)
-                    # 🔴 Mostrar SOLO cultivos con "Si"
+                    # SOLO cultivos "Si"
                     if "cultivo" in df_lab_long.columns:
                         df_lab_long = df_lab_long[df_lab_long["cultivo"].map(_es_si)]
 
@@ -491,29 +507,30 @@ def modulo_vigilancia():
                 if df_vig.empty:
                     st.info("No hay datos en la pestaña 'Vigilancia'.")
                 else:
-                    # --- Filtrado por 'piso' ---
+                    # Filtrado por 'piso' y solo pacientes
                     df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
-                    # --- Conteos para tarjetas estilo CVE (CORREGIDOS) ---
+                    # ---- Tarjetas (nueva lógica IAAS) ----
                     total_pac = int(len(df_censo))
-                    iaas_cnt  = int(_iaas_num(df_censo).sum()) if "iaas_sino" in df_censo.columns else 0
-                    cultivos_cnt = contar_cultivos_si(df_vig)  # SOLO cultivo_i == 'Si'
-                    micro_cnt    = contar_microorganismos_si(df_vig)  # germen_i asociados a esos "Si"
+                    iaas_total = contar_iaas_totales(df_censo)         # todas las IAAS (suma de iaas_1..4 == "Si")
+                    pacs_con_iaas = contar_pacientes_con_iaas(df_censo) # pacientes con >=1 IAAS
+                    cultivos_cnt = contar_cultivos_si(df_vig)          # cultivo_i == "Si"
+                    micro_cnt    = contar_microorganismos_si(df_vig)   # germen_i cuando cultivo_i == "Si"
 
-                    # --- Tarjetas coloreadas ---
-                    cA, cB, cC, cD = st.columns(4)
+                    cA, cB, cB2, cC, cD = st.columns(5)
                     with cA:
                         stat_card(total_pac, "Total de pacientes", "#6C63FF", "📝")
                     with cB:
-                        stat_card(iaas_cnt, "IAAS", "#2ECC71", "🩺")
+                        stat_card(iaas_total, "IAAS", "#2ECC71", "🩺")
+                    with cB2:
+                        stat_card(pacs_con_iaas, "Pacientes con IAAS", "#E74C3C", "❤️")
                     with cC:
                         stat_card(cultivos_cnt, "Cultivos", "#1E90FF", "🧪")
                     with cD:
                         stat_card(micro_cnt, "Microorganismos", "#F39C12", "🔬")
 
                     st.markdown("### ")
-                    # --- Top 5 servicios ---
                     if "servicio" in df_censo.columns and not df_censo.empty:
                         st.markdown("**Servicios con más pacientes (Top 5):**")
                         top_srv = (
@@ -524,7 +541,6 @@ def modulo_vigilancia():
                     else:
                         st.info("No hay columna 'servicio' para mostrar el Top 5.")
 
-                    # --- Tabla nominal completa filtrada ---
                     st.markdown("### ")
                     st.dataframe(df_censo, use_container_width=True)
             except Exception as e:
