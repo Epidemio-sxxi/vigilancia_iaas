@@ -173,7 +173,7 @@ def modulo_riesgo():
     st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
 # ======================================================
-#        Módulo: Vigilancia Activa
+#        Módulo: Vigilancia Activa (filtrado por 'piso')
 # ======================================================
 def _es_paciente(df: pd.DataFrame) -> pd.Series:
     if "status_paciente" in df.columns:
@@ -231,22 +231,24 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     df_long = df_long[id_cols + ordered]
     return df_long
 
+# --- Normalizador y filtro por 'piso' ---
+def _norm_piso(s):
+    return str(s).strip().upper()
+
+def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
+    if df is None or df.empty or not seleccion:
+        return df
+    if _norm_piso(seleccion) in {"UMAE COMPLETA", "UMAE", "TODOS", "ALL"}:
+        return df
+    if "piso" not in df.columns:
+        st.error("La hoja no tiene la columna 'piso'. Verifica tu Google Sheet.")
+        return df
+    df2 = df.copy()
+    df2["__piso_norm"] = df2["piso"].map(_norm_piso)
+    return df2[df2["__piso_norm"] == _norm_piso(seleccion)].drop(columns="__piso_norm")
+
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
-
-    # Helper filtro por sector; si es "UMAE completa" no filtra
-    def filtra_por_sector(df: pd.DataFrame, sector: Optional[str]) -> pd.DataFrame:
-        if df is None or df.empty or not sector:
-            return df
-        if str(sector).strip().upper() in ["UMAE COMPLETA", "UMAE", "TODOS", "ALL"]:
-            return df
-        sector_str = str(sector).strip().upper()
-        candidatos = [c for c in ["piso","sector","servicio","planta","bloque"] if c in df.columns]
-        if not candidatos:
-            return df
-        col = candidatos[0]
-        serie = df[col].astype(str).str.strip().str.upper()
-        return df[serie == sector_str].copy()
 
     # Panel de configuración (gid + modo)
     with st.expander("⚙️ Configuración de Google Sheets", expanded=False):
@@ -267,16 +269,26 @@ def modulo_vigilancia():
             else:
                 st.info(msg)
 
-    # Selector de sector con opción "UMAE completa"
-    planos_existentes = [f.replace(".png", "") for f in sorted(os.listdir("data/planos")) if f.endswith(".png")]
-    opciones_sector = ["UMAE completa"] + (planos_existentes if planos_existentes else [])
-    if not planos_existentes:
-        st.warning("No hay planos en 'data/planos'. Se mostrarán solo tablas y gráficas.")
+    # --- Obtener Vigilia para armar el selector de 'piso' desde la hoja ---
+    try:
+        df_vig_for_opts = get_vigilancia(gid_map)
+        if "piso" in df_vig_for_opts.columns:
+            pisos_disponibles = sorted(
+                df_vig_for_opts["piso"].dropna().astype(str).map(lambda x: x.strip()).unique()
+            )
+        else:
+            pisos_disponibles = []
+    except Exception:
+        pisos_disponibles = []
+
+    # Selector con "UMAE completa" + pisos de la hoja
+    opciones_sector = ["UMAE completa"] + pisos_disponibles
     st.markdown("##### Selecciona el sector del hospital:")
     col_sel, _ = st.columns([1.2, 3])
     with col_sel:
         plano_sel = st.selectbox("", options=opciones_sector, label_visibility="collapsed")
 
+    # Mostrar plano si existe imagen con ese nombre (excepto UMAE)
     imagen_path = os.path.join("data/planos", f"{plano_sel}.png") if plano_sel != "UMAE completa" else None
 
     col1, col2 = st.columns([1, 4])
@@ -295,8 +307,8 @@ def modulo_vigilancia():
     with col2:
         if imagen_path and os.path.exists(imagen_path):
             st.image(imagen_path, use_container_width=True, caption=f"Plano sector {plano_sel}")
-        elif plano_sel != "UMAE completa" and planos_existentes:
-            st.warning("⚠️ No se encontró el plano del sector.")
+        elif plano_sel != "UMAE completa" and len(pisos_disponibles) > 0:
+            st.caption("No hay imagen para este sector. (Opcional) coloca un PNG en data/planos con el nombre del piso.")
 
         # ------ Submódulos ------
         if mostrar_curva_epidemica:
@@ -306,7 +318,7 @@ def modulo_vigilancia():
                 if df_hist.empty or "fecha_reporte" not in df_hist.columns:
                     st.info("Histórico vacío o sin 'fecha_reporte'.")
                 else:
-                    tmp = filtra_por_sector(df_hist.copy(), plano_sel)
+                    tmp = filtra_por_piso(df_hist.copy(), plano_sel)
                     tmp["es_paciente"] = _es_paciente(tmp)
                     tmp["iaas_num"] = _iaas_num(tmp)
                     prev = (
@@ -316,7 +328,6 @@ def modulo_vigilancia():
                         .assign(prevalencia=lambda d: d["iaas_activos"] / d["total_hosp"].replace(0, pd.NA))
                         .reset_index()
                     )
-                    # slider de rango de días
                     dias = st.slider("Rango de días para la curva", 14, 180, 60)
                     if pd.notna(prev["fecha_reporte"].max()):
                         desde = prev["fecha_reporte"].max() - pd.Timedelta(days=dias)
@@ -333,8 +344,8 @@ def modulo_vigilancia():
                 if df_vig.empty:
                     st.info("'Vigilancia' está vacía.")
                 else:
-                    df_vig = filtra_por_sector(df_vig.copy(), plano_sel)
-                    # Elegimos la mejor columna de fecha disponible
+                    df_vig = filtra_por_piso(df_vig.copy(), plano_sel)
+                    # columna de fecha preferida para captura
                     fecha_cols = [c for c in [
                         "fecha_reporte","fec_ingreso","fecha_muestra_1","fecha_resultado_1",
                         "fecha_muestra_2","fecha_resultado_2","fecha_muestra_3","fecha_resultado_3",
@@ -344,10 +355,8 @@ def modulo_vigilancia():
                     if not fecha_ref:
                         st.info("No hay columnas de fecha para graficar la captura.")
                     else:
-                        # Solo pacientes válidos
                         df_cap = df_vig[_es_paciente(df_vig)].copy()
                         df_cap = df_cap[pd.notna(df_cap[fecha_ref])]
-                        # slider rango días
                         dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap")
                         fecha_max = df_cap[fecha_ref].max()
                         if pd.notna(fecha_max):
@@ -368,11 +377,11 @@ def modulo_vigilancia():
                 if df_vig.empty:
                     st.info("'Vigilancia' está vacía.")
                 else:
-                    df_vig = filtra_por_sector(df_vig, plano_sel)  # filtra excepto UMAE completa
+                    df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_lab_long = lab_desde_vigilancia(df_vig)
                     if df_lab_long.empty:
                         msg = "Sin registros de laboratorio"
-                        msg += " en el sector seleccionado." if plano_sel != "UMAE completa" else " en la UMAE."
+                        msg += " en el sector seleccionado." if _norm_piso(plano_sel) != "UMAE COMPLETA" else " en la UMAE."
                         st.info(msg)
                     else:
                         fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab_long.columns else (
@@ -386,7 +395,7 @@ def modulo_vigilancia():
                                 df_lab_long = df_lab_long[df_lab_long[fecha_ref] >= desde]
 
                         st.metric(
-                            f"Registros de laboratorio ({'sector' if plano_sel!='UMAE completa' else 'UMAE completa'})",
+                            f"Registros de laboratorio ({'sector' if _norm_piso(plano_sel)!='UMAE COMPLETA' else 'UMAE completa'})",
                             len(df_lab_long)
                         )
 
@@ -425,17 +434,17 @@ def modulo_vigilancia():
                 if df_vig.empty:
                     st.info("No hay datos en la pestaña 'Vigilancia'.")
                 else:
-                    df_vig = filtra_por_sector(df_vig, plano_sel)  # filtra excepto UMAE completa
+                    df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
                     c1, c2, c3 = st.columns(3)
                     c1.metric(
-                        f"Pacientes activos ({'sector' if plano_sel!='UMAE completa' else 'UMAE completa'})",
+                        f"Pacientes activos ({'sector' if _norm_piso(plano_sel)!='UMAE COMPLETA' else 'UMAE completa'})",
                         len(df_censo)
                     )
                     if "iaas_sino" in df_censo.columns:
                         c2.metric(
-                            f"IAAS activos ({'sector' if plano_sel!='UMAE completa' else 'UMAE completa'})",
+                            f"IAAS activos ({'sector' if _norm_piso(plano_sel)!='UMAE COMPLETA' else 'UMAE completa'})",
                             int(_iaas_num(df_censo).sum())
                         )
                     if "servicio" in df_censo.columns and not df_censo.empty:
