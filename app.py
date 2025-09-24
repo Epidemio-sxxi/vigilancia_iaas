@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
+import unicodedata
 from typing import Optional
 
 # ---------------- Configuración global ----------------
@@ -185,6 +186,43 @@ def _iaas_num(df: pd.DataFrame, col="iaas_sino") -> pd.Series:
         return pd.to_numeric(df[col], errors="coerce").fillna(0)
     return pd.Series([0] * len(df), index=df.index)
 
+# ---------- Helpers de cultivos/microorganismos (CORREGIDOS) ----------
+def _strip_accents(text: str) -> str:
+    return ''.join(ch for ch in unicodedata.normalize('NFKD', text) if not unicodedata.combining(ch))
+
+def _es_si(val) -> bool:
+    """True si val es 'Si' (acepta sí/SI/si/sí/true/1)."""
+    if val is None:
+        return False
+    s = str(val).strip().lower()
+    s = _strip_accents(s)  # 'sí' -> 'si'
+    return s in {"si", "s", "true", "1"}
+
+def contar_cultivos_si(df: pd.DataFrame) -> int:
+    """Cuenta ocurrencias 'Si' en cultivo_1..cultivo_4."""
+    cols = [c for c in ["cultivo_1","cultivo_2","cultivo_3","cultivo_4"] if c in df.columns]
+    if not cols:
+        return 0
+    total = 0
+    for c in cols:
+        total += df[c].map(_es_si).astype(int).sum()
+    return int(total)
+
+def contar_microorganismos_si(df: pd.DataFrame) -> int:
+    """Número de microorganismos únicos (germen_i) donde cultivo_i == 'Si'."""
+    piezas = []
+    for i in [1, 2, 3, 4]:
+        c_cult = f"cultivo_{i}"
+        c_germ = f"germen_{i}"
+        if c_cult in df.columns and c_germ in df.columns:
+            mask = df[c_cult].map(_es_si)
+            piezas.append(df.loc[mask, c_germ].astype(str).str.strip())
+    if not piezas:
+        return 0
+    germs = pd.concat(piezas, ignore_index=True).replace({"": pd.NA, "nan": pd.NA})
+    return int(germs.dropna().nunique())
+
+# ---------- Aplanado de laboratorio ----------
 def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     id_cols = [
         "piso","servicio","cama","nss","ap_paterno","ap_materno","nombre","sexo","edad","fec_ingreso"
@@ -211,6 +249,7 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
         for c in ["fecha_muestra","fecha_resultado","fec_ingreso"]:
             if c in tmp.columns:
                 tmp[c] = pd.to_datetime(tmp[c], errors="coerce", dayfirst=True, infer_datetime_format=True)
+        # Filtrar filas sin información mínima
         has_info = False
         for c in ["germen","tipo_resultado","tipo_muestra","cultivo"]:
             if c in tmp.columns:
@@ -226,7 +265,7 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
 
     df_long = pd.concat(frames, ignore_index=True)
     ordered = [c for c in [
-        "no_cultivo","fecha_muestra","fecha_resultado","tipo_muestra","tipo_resultado","germen","resistencia"
+        "no_cultivo","fecha_muestra","fecha_resultado","tipo_muestra","tipo_resultado","germen","resistencia","cultivo"
     ] if c in df_long.columns]
     df_long = df_long[id_cols + ordered]
     return df_long
@@ -393,6 +432,10 @@ def modulo_vigilancia():
                 else:
                     df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_lab_long = lab_desde_vigilancia(df_vig)
+                    # 🔴 Mostrar SOLO cultivos con "Si"
+                    if "cultivo" in df_lab_long.columns:
+                        df_lab_long = df_lab_long[df_lab_long["cultivo"].map(_es_si)]
+
                     if df_lab_long.empty:
                         msg = "Sin registros de laboratorio"
                         msg += " en el sector seleccionado." if _norm_piso(plano_sel) != "UMAE COMPLETA" else " en la UMAE."
@@ -452,18 +495,11 @@ def modulo_vigilancia():
                     df_vig = filtra_por_piso(df_vig, plano_sel)
                     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
-                    # --- Conteos para tarjetas estilo CVE ---
+                    # --- Conteos para tarjetas estilo CVE (CORREGIDOS) ---
                     total_pac = int(len(df_censo))
                     iaas_cnt  = int(_iaas_num(df_censo).sum()) if "iaas_sino" in df_censo.columns else 0
-                    # Cultivos / Microorganismos a partir de la misma vigilancia filtrada
-                    _lab = lab_desde_vigilancia(df_vig)
-                    cultivos_cnt = int(len(_lab)) if not _lab.empty else 0
-                    if not _lab.empty and "germen" in _lab.columns:
-                        micro_cnt = int(
-                            _lab["germen"].astype(str).str.strip().replace({"": pd.NA, "nan": pd.NA}).dropna().nunique()
-                        )
-                    else:
-                        micro_cnt = 0
+                    cultivos_cnt = contar_cultivos_si(df_vig)  # SOLO cultivo_i == 'Si'
+                    micro_cnt    = contar_microorganismos_si(df_vig)  # germen_i asociados a esos "Si"
 
                     # --- Tarjetas coloreadas ---
                     cA, cB, cC, cD = st.columns(4)
