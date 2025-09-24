@@ -318,9 +318,9 @@ def modulo_vigilancia():
             else:
                 st.info(msg)
 
-    # ===== Fila: Selector (angosto) + Plano (a la derecha) =====
+    # ===== Fila 1: Selector (angosto) + Plano (derecha) =====
     st.markdown("#### Selecciona el sector del hospital:")
-    col_sel, col_plano = st.columns([1.1, 3.9])  # selector angosto
+    col_sel, col_plano = st.columns([1.1, 3.9])  # ¡importante mantener la misma proporción en filas siguientes!
     with col_sel:
         # Opciones desde la hoja
         try:
@@ -345,45 +345,45 @@ def modulo_vigilancia():
     df_vig = filtra_por_piso(df_vig, plano_sel)
     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
-    # ===== Información general (tarjetas) =====
-    st.markdown("### Información general")
-    total_pac    = int(len(df_censo))
-    iaas_total   = contar_iaas_totales(df_censo)
-    pacs_iaas    = contar_pacientes_con_iaas(df_censo)
-    cultivos_cnt = contar_cultivos_si(df_vig)
-    micro_cnt    = contar_microorganismos_si(df_vig)
-
-    cA, cB, cB2, cC, cD = st.columns(5)
-    with cA:  stat_card(total_pac, "Total de pacientes",   "#6C63FF", "📝")
-    with cB:  stat_card(iaas_total, "IAAS",                 "#2ECC71", "🩺")
-    with cB2: stat_card(pacs_iaas,  "Pacientes con IAAS",   "#E74C3C", "❤️")
-    with cC:  stat_card(cultivos_cnt, "Cultivos",           "#1E90FF", "🧪")
-    with cD:  stat_card(micro_cnt,    "Microorganismos",    "#F39C12", "🔬")
-
-    # ===== Top 5 Servicios (debajo de tarjetas) =====
-    st.markdown("### Servicios con más pacientes (Top 5)")
-    if "servicio" in df_censo.columns and not df_censo.empty:
-        top_srv = (
-            df_censo.groupby("servicio")["servicio"].count()
-            .sort_values(ascending=False).head(5).reset_index(name="pacientes")
-        )
-        st.dataframe(top_srv, use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay columna 'servicio' para mostrar el Top 5.")
-
-    st.markdown("---")
-
-    # ===== Columna izquierda: Módulos disponibles / derecha: contenido =====
-    col_left, col_right = st.columns([1, 4])
+    # ===== Fila 2: Izquierda (módulos) + Derecha (info + servicios + contenido) =====
+    col_left, col_right = st.columns([1.1, 3.9])  # MISMA PROPORCIÓN que la fila del PNG
     with col_left:
-        st.markdown("### 🧭 Módulos disponibles")
+        st.markdown("### 🏥 Módulos disponibles")
         mostrar_curva_epidemica = st.checkbox("Curva Epidémica de IAAS", value=False)
         mostrar_curva_captura   = st.checkbox("Captura en INOSO", value=False)
-        mostrar_reporte_cult    = st.checkbox("Reporte de cultivos", value=False)  # renombrado
-        mostrar_censo           = st.checkbox("Censo nominal", value=False)        # renombrado
+        mostrar_reporte_cult    = st.checkbox("Reporte de cultivos", value=False)
+        mostrar_censo           = st.checkbox("Censo nominal", value=False)
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
     with col_right:
+        # ===== Información general (tarjetas) =====
+        st.markdown("### Información general")
+        total_pac    = int(len(df_censo))
+        iaas_total   = contar_iaas_totales(df_censo)
+        pacs_iaas    = contar_pacientes_con_iaas(df_censo)
+        cultivos_cnt = contar_cultivos_si(df_vig)
+        micro_cnt    = contar_microorganismos_si(df_vig)
+
+        cA, cB, cB2, cC, cD = st.columns(5)
+        with cA:  stat_card(total_pac, "Total de pacientes",   "#6C63FF", "🛏️")
+        with cB:  stat_card(iaas_total, "IAAS",                 "#2ECC71", "🩺")
+        with cB2: stat_card(pacs_iaas,  "Pacientes con IAAS",   "#E74C3C", "👤")
+        with cC:  stat_card(cultivos_cnt, "Cultivos",           "#1E90FF", "🧪")
+        with cD:  stat_card(micro_cnt,    "Microorganismos",    "#F39C12", "🔬")
+
+        # ===== Top 5 Servicios (debajo de tarjetas) =====
+        st.markdown("### Servicios con más pacientes (Top 5)")
+        if "servicio" in df_censo.columns and not df_censo.empty:
+            top_srv = (
+                df_censo.groupby("servicio")["servicio"].count()
+                .sort_values(ascending=False).head(5).reset_index(name="pacientes")
+            )
+            st.dataframe(top_srv, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay columna 'servicio' para mostrar el Top 5.")
+
+        st.markdown("---")
+
         # --- Curva epidémica ---
         if mostrar_curva_epidemica:
             st.subheader("📈 Curva Epidémica de IAAS")
@@ -393,13 +393,11 @@ def modulo_vigilancia():
                     st.info("Histórico vacío o sin 'fecha_reporte'.")
                 else:
                     tmp = filtra_por_piso(df_hist.copy(), plano_sel)
-                    # Usamos columna 'iaas_sino' si existe para continuidad del tablero
                     tmp["es_paciente"] = _es_paciente(tmp)
                     iaas_col = "iaas_sino" if "iaas_sino" in tmp.columns else None
                     if iaas_col:
                         tmp["iaas_num"] = pd.to_numeric(tmp[iaas_col], errors="coerce").fillna(0)
                     else:
-                        # fallback: contar si hay alguna IAAS en 1..4
                         cols = _iaas_cols(tmp)
                         tmp["iaas_num"] = tmp[cols].applymap(_es_si).any(axis=1).astype(int) if cols else 0
                     prev = (
@@ -451,7 +449,7 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo calcular la captura INOSO: {e}")
 
-        # --- Reporte de cultivos (renombrado) ---
+        # --- Reporte de cultivos ---
         if mostrar_reporte_cult:
             st.subheader("🧪 Reporte de cultivos")
             try:
@@ -465,7 +463,6 @@ def modulo_vigilancia():
                     if df_lab.empty:
                         st.info("Sin cultivos positivos en esta vista.")
                     else:
-                        # Filtros de fecha
                         fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab.columns else (
                             "fecha_resultado" if "fecha_resultado" in df_lab.columns else None
                         )
@@ -478,7 +475,6 @@ def modulo_vigilancia():
 
                         st.metric(f"Registros de laboratorio ({plano_sel})", len(df_lab))
 
-                        # Gráficos
                         if "germen" in df_lab.columns:
                             top = (
                                 df_lab["germen"].astype(str).str.strip()
@@ -503,14 +499,13 @@ def modulo_vigilancia():
                                 fig_m.update_layout(xaxis_tickangle=-30)
                                 st.plotly_chart(fig_m, use_container_width=True)
 
-                        # Tabla – ocultar columnas solicitadas
                         drop_cols = {"Unnamed: 0", "index", "no_cultivo", "cultivo", "fec_ingreso"}
                         cols = [c for c in df_lab.columns if c not in drop_cols]
                         st.dataframe(df_lab[cols], use_container_width=True)
             except Exception as e:
                 st.error(f"No se pudo generar el reporte de cultivos: {e}")
 
-        # --- Censo nominal (renombrado y sólo IAAS) ---
+        # --- Censo nominal ---
         if mostrar_censo:
             st.subheader("📒 Censo nominal")
             try:
@@ -521,13 +516,11 @@ def modulo_vigilancia():
                     cols_iaas = _iaas_cols(df_v)
                     if cols_iaas:
                         df_v = df_v[df_v[cols_iaas].applymap(_es_si).any(axis=1)]
-                    # Columnas requeridas
                     keep = [
                         "cama","status_paciente","servicio","fec_ingreso","ap_paterno","ap_materno","nombre","nss",
                         "ag_med","edad","sexo","iaas_1","iaas_2","iaas_3","iaas_4",
                         "tp_iaas_1","tp_iaas_2","tp_iaas_3","tp_iaas_4","tp_aislamiento"
                     ]
-                    # Ocultar columnas índice típicas
                     to_hide = {"Unnamed: 0", "index", "#", "No", "no"}
                     cols_finales = [c for c in keep if c in df_v.columns and c not in to_hide]
                     if not cols_finales:
