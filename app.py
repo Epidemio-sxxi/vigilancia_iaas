@@ -481,6 +481,7 @@ def modulo_vigilancia():
                     if df_lab.empty:
                         st.info("Sin cultivos positivos en esta vista.")
                     else:
+                        # Filtro temporal
                         fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab.columns else (
                             "fecha_resultado" if "fecha_resultado" in df_lab.columns else None
                         )
@@ -491,20 +492,71 @@ def modulo_vigilancia():
                                 desde = fecha_max - pd.Timedelta(days=dias)
                                 df_lab = df_lab[df_lab[fecha_ref] >= desde]
 
-                        st.metric(f"Registros de laboratorio ({plano_sel})", len(df_lab))
-
+                        # --- Treemap interactivo de microorganismos ---
+                        # 1) Conteo por germen
                         if "germen" in df_lab.columns:
                             top = (
                                 df_lab["germen"].astype(str).str.strip()
                                 .replace({"nan": pd.NA, "": pd.NA}).dropna()
-                                .value_counts().head(10).reset_index()
+                                .value_counts().reset_index()
                             )
                             top.columns = ["Microorganismo", "Casos"]
-                            if not top.empty:
-                                fig_top = px.bar(top, x="Microorganismo", y="Casos")
-                                fig_top.update_layout(xaxis_tickangle=-30)
+                        else:
+                            top = pd.DataFrame(columns=["Microorganismo", "Casos"])
+
+                        if not top.empty:
+                            # Estado del filtro
+                            if "micro_filter" not in st.session_state:
+                                st.session_state.micro_filter = None
+
+                            # Treemap con click-to-filter (si hay dependencia), si no, fallback a selectbox
+                            can_click = False
+                            try:
+                                from streamlit_plotly_events import plotly_events  # type: ignore
+                                can_click = True
+                            except Exception:
+                                can_click = False
+
+                            fig_top = px.treemap(top, path=["Microorganismo"], values="Casos")
+                            fig_top.update_traces(root_color="lightgrey")
+
+                            clicked_label = None
+                            if can_click:
+                                selected = plotly_events(fig_top, click_event=True, hover_event=False, select_event=False,
+                                                         key=f"treemap_micro_{_norm_piso(plano_sel)}")
+                                if selected:
+                                    # plotly_events devuelve dicts con varias claves; intentamos obtener etiqueta
+                                    cand = selected[0]
+                                    clicked_label = cand.get("label") or cand.get("text") or cand.get("id")
+                            else:
                                 st.plotly_chart(fig_top, use_container_width=True)
 
+                            # Fallback UI si no hay click events disponibles
+                            if not can_click:
+                                opciones = ["(Todos)"] + top["Microorganismo"].tolist()
+                                sel_ui = st.selectbox("Filtrar por microorganismo", opciones, index=0,
+                                                      key=f"sel_micro_{_norm_piso(plano_sel)}")
+                                if sel_ui != "(Todos)":
+                                    st.session_state.micro_filter = sel_ui
+                                else:
+                                    st.session_state.micro_filter = None
+
+                            # Aplicar filtro por click (o por selectbox fallback)
+                            if clicked_label:
+                                st.session_state.micro_filter = clicked_label
+
+                            if st.session_state.micro_filter:
+                                st.success(f"Filtro aplicado: {st.session_state.micro_filter}")
+                                df_lab = df_lab[df_lab["germen"].astype(str).str.strip().str.casefold() ==
+                                                str(st.session_state.micro_filter).strip().casefold()]
+                                if st.button("Quitar filtro", key=f"clear_micro_{_norm_piso(plano_sel)}"):
+                                    st.session_state.micro_filter = None
+                                    st.rerun()
+
+                        # Métrica de registros tras aplicar filtro
+                        st.metric(f"Registros de laboratorio ({plano_sel})", len(df_lab))
+
+                        # 2) Distribución por tipo de muestra
                         if "tipo_muestra" in df_lab.columns:
                             por_muestra = (
                                 df_lab["tipo_muestra"].astype(str).str.strip()
@@ -517,6 +569,7 @@ def modulo_vigilancia():
                                 fig_m.update_layout(xaxis_tickangle=-30)
                                 st.plotly_chart(fig_m, use_container_width=True)
 
+                        # 3) Tabla detallada
                         drop_cols = {"Unnamed: 0", "index", "no_cultivo", "cultivo", "fec_ingreso"}
                         cols = [c for c in df_lab.columns if c not in drop_cols]
                         st.dataframe(df_lab[cols], use_container_width=True)
@@ -550,11 +603,10 @@ def modulo_vigilancia():
 
     # --------- Cintilla de “Información actualizada” ---------
     # Requerimiento: SIEMPRE hora/fecha actuales del refresco (no del histórico ni del contenido)
-    # Hora local del usuario/operación (por defecto CDMX). Permite override por secretos/ENV.
-    import os
+    import os as _os
     try:
         from zoneinfo import ZoneInfo
-        tz_name = st.secrets.get("tz", os.environ.get("REDIAAS_TZ", "America/Mexico_City"))
+        tz_name = st.secrets.get("tz", _os.environ.get("REDIAAS_TZ", "America/Mexico_City"))
         tz = ZoneInfo(tz_name)
     except Exception:
         tz = None
