@@ -492,46 +492,32 @@ def modulo_vigilancia():
                                 desde = fecha_max - pd.Timedelta(days=dias)
                                 df_lab = df_lab[df_lab[fecha_ref] >= desde]
 
-                        # --- Treemap de microorganismos + filtros tipo "chips" (sin dependencias) ---
+                        # --- Treemap simple (sin selección) y con regla de "Pendiente" ---
+                        # Regla: si germen está missing y hay fecha_muestra, contar como "Pendiente".
                         if "germen" in df_lab.columns:
-                            top = (
+                            df_lab["germen_plot"] = (
                                 df_lab["germen"].astype(str).str.strip()
-                                .replace({"nan": pd.NA, "": pd.NA}).dropna()
-                                .value_counts().reset_index()
+                                .replace({"nan": pd.NA, "": pd.NA})
                             )
-                            top.columns = ["Microorganismo", "Casos"]
                         else:
-                            top = pd.DataFrame(columns=["Microorganismo", "Casos"])
+                            df_lab["germen_plot"] = pd.NA
+
+                        if "fecha_muestra" in df_lab.columns:
+                            mask_pend = df_lab["germen_plot"].isna() & df_lab["fecha_muestra"].notna()
+                            df_lab.loc[mask_pend, "germen_plot"] = "Pendiente"
+
+                        top = (
+                            df_lab["germen_plot"].dropna()
+                            .value_counts().reset_index()
+                        )
+                        top.columns = ["Microorganismo", "Casos"]
 
                         if not top.empty:
-                            if "micro_filter" not in st.session_state:
-                                st.session_state.micro_filter = None
-
                             fig_top = px.treemap(top, path=["Microorganismo"], values="Casos")
                             fig_top.update_traces(root_color="lightgrey")
                             st.plotly_chart(fig_top, use_container_width=True)
 
-                            # ---- Chips de filtro (sin instalar nada) ----
-                            chips = ["(Todos)"] + top["Microorganismo"].tolist()
-                            n_cols = min(6, max(1, len(chips)))
-                            cols_chips = st.columns(n_cols)
-                            for i, label in enumerate(chips):
-                                col = cols_chips[i % n_cols]
-                                if col.button(label, key=f"chip_micro_{_norm_piso(plano_sel)}_{i}"):
-                                    st.session_state.micro_filter = None if label == "(Todos)" else label
-                                    st.rerun()
-
-                            if st.session_state.micro_filter:
-                                st.success(f"Filtro aplicado: {st.session_state.micro_filter}")
-                                df_lab = df_lab[
-                                    df_lab["germen"].astype(str).str.strip().str.casefold()
-                                    == str(st.session_state.micro_filter).strip().casefold()
-                                ]
-                                if st.button("Quitar filtro", key=f"clear_micro_{_norm_piso(plano_sel)}"):
-                                    st.session_state.micro_filter = None
-                                    st.rerun()
-
-                        # Métrica de registros tras aplicar filtro
+                        # Métrica de registros
                         st.metric(f"Registros de laboratorio ({plano_sel})", len(df_lab))
 
                         # 2) Distribución por tipo de muestra
