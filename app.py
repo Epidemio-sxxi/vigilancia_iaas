@@ -492,8 +492,7 @@ def modulo_vigilancia():
                                 desde = fecha_max - pd.Timedelta(days=dias)
                                 df_lab = df_lab[df_lab[fecha_ref] >= desde]
 
-                        # --- Treemap interactivo de microorganismos ---
-                        # 1) Conteo por germen
+                        # --- Treemap interactivo de microorganismos (sin selectbox) ---
                         if "germen" in df_lab.columns:
                             top = (
                                 df_lab["germen"].astype(str).str.strip()
@@ -505,50 +504,41 @@ def modulo_vigilancia():
                             top = pd.DataFrame(columns=["Microorganismo", "Casos"])
 
                         if not top.empty:
-                            # Estado del filtro
                             if "micro_filter" not in st.session_state:
                                 st.session_state.micro_filter = None
-
-                            # Treemap con click-to-filter (si hay dependencia), si no, fallback a selectbox
-                            can_click = False
-                            try:
-                                from streamlit_plotly_events import plotly_events  # type: ignore
-                                can_click = True
-                            except Exception:
-                                can_click = False
 
                             fig_top = px.treemap(top, path=["Microorganismo"], values="Casos")
                             fig_top.update_traces(root_color="lightgrey")
 
+                            # Captura de click con streamlit-plotly-events
                             clicked_label = None
-                            if can_click:
-                                selected = plotly_events(fig_top, click_event=True, hover_event=False, select_event=False,
-                                                         key=f"treemap_micro_{_norm_piso(plano_sel)}")
+                            try:
+                                from streamlit_plotly_events import plotly_events  # type: ignore
+                                selected = plotly_events(
+                                    fig_top,
+                                    click_event=True,
+                                    hover_event=False,
+                                    select_event=False,
+                                    key=f"treemap_micro_{_norm_piso(plano_sel)}",
+                                )
                                 if selected:
-                                    # plotly_events devuelve dicts con varias claves; intentamos obtener etiqueta
                                     cand = selected[0]
                                     clicked_label = cand.get("label") or cand.get("text") or cand.get("id")
-                            else:
+                            except Exception:
+                                # Si no está disponible la librería, solo renderizamos el treemap (no hay filtro por click)
                                 st.plotly_chart(fig_top, use_container_width=True)
+                                st.info("Para filtrar con click instala 'streamlit-plotly-events'.")
 
-                            # Fallback UI si no hay click events disponibles
-                            if not can_click:
-                                opciones = ["(Todos)"] + top["Microorganismo"].tolist()
-                                sel_ui = st.selectbox("Filtrar por microorganismo", opciones, index=0,
-                                                      key=f"sel_micro_{_norm_piso(plano_sel)}")
-                                if sel_ui != "(Todos)":
-                                    st.session_state.micro_filter = sel_ui
-                                else:
-                                    st.session_state.micro_filter = None
-
-                            # Aplicar filtro por click (o por selectbox fallback)
+                            # Si hubo click, aplicar filtro
                             if clicked_label:
                                 st.session_state.micro_filter = clicked_label
 
                             if st.session_state.micro_filter:
                                 st.success(f"Filtro aplicado: {st.session_state.micro_filter}")
-                                df_lab = df_lab[df_lab["germen"].astype(str).str.strip().str.casefold() ==
-                                                str(st.session_state.micro_filter).strip().casefold()]
+                                df_lab = df_lab[
+                                    df_lab["germen"].astype(str).str.strip().str.casefold()
+                                    == str(st.session_state.micro_filter).strip().casefold()
+                                ]
                                 if st.button("Quitar filtro", key=f"clear_micro_{_norm_piso(plano_sel)}"):
                                     st.session_state.micro_filter = None
                                     st.rerun()
