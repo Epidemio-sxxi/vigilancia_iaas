@@ -104,7 +104,7 @@ def _leer_csv_publico(sheet_id: str, gid: str) -> pd.DataFrame:
     return pd.read_csv(url)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=10, show_spinner=False)
 def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
     """Lee una pestaña por nombre; si falla, intenta por CSV usando el gid del nombre dado."""
     if GS_READY:
@@ -592,4 +592,5 @@ elif st.session_state.menu == "riesgo":
     st.info("Módulo de riesgo por cama disponible en otra sección del código.")
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
+
 
