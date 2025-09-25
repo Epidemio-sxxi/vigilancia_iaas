@@ -5,7 +5,7 @@ import plotly.express as px
 import os
 import unicodedata
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 # ---------------- Configuración global ----------------
 st.set_page_config(layout="wide", page_title="Monitoreo de IAAS - REDIAAS")
@@ -128,11 +128,15 @@ def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
 
     # Parseo de fechas (compat. pandas 2.x)
-    for c in [
+    fecha_cols_basicas: List[str] = [
         "fecha_reporte", "fec_ingreso", "fec_egreso", "fec_inicio_sintomas", "fec_toma_muestra",
         "fecha_muestra_1", "fecha_resultado_1", "fecha_muestra_2", "fecha_resultado_2",
         "fecha_muestra_3", "fecha_resultado_3", "fecha_muestra_4", "fecha_resultado_4",
-    ]:
+    ]
+    # Nuevas columnas múltiples: fec_inicio_iaas_1..4 y fec_captura_1..4
+    fecha_cols_nuevas = [f"fec_inicio_iaas_{i}" for i in range(1,5)] + [f"fec_captura_{i}" for i in range(1,5)]
+
+    for c in fecha_cols_basicas + fecha_cols_nuevas:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
 
@@ -403,67 +407,118 @@ def modulo_vigilancia():
 
         st.markdown("---")
 
-        # --- Curva epidémica (desde Histórico) ---
+        # --- Curva epidémica (Incidencia por fec_inicio_iaas_1..4) usando Histórico ∪ Viglancia ---
         if mostrar_curva_epidemica:
-            st.subheader("📈 Curva Epidémica de IAAS")
+            st.subheader("📈 Curva Epidémica de IAAS (inicio de síntomas)")
             try:
                 df_hist = get_historico(gid_map)
-                if df_hist.empty or "fecha_reporte" not in df_hist.columns:
-                    st.info("Histórico vacío o sin 'fecha_reporte'.")
+                df_union = pd.concat([df_hist, df_vig], ignore_index=True, sort=False)
+                tmp = filtra_por_piso(df_union.copy(), plano_sel)
+                if tmp.empty:
+                    st.info("No hay datos para construir la curva en esta vista.")
                 else:
-                    tmp = filtra_por_piso(df_hist.copy(), plano_sel)
-                    tmp["es_paciente"] = _es_paciente(tmp)
-                    iaas_col = "iaas_sino" if "iaas_sino" in tmp.columns else None
-                    if iaas_col:
-                        tmp["iaas_num"] = pd.to_numeric(tmp[iaas_col], errors="coerce").fillna(0)
+                    # Construye eventos a partir de fec_inicio_iaas_1..4 (validando iaas_i cuando exista)
+                    id_cols = [c for c in ["nss", "cama", "ap_paterno", "ap_materno", "nombre"] if c in tmp.columns]
+                    eventos = []
+                    for i in range(1, 5):
+                        dcol = f"fec_inicio_iaas_{i}"
+                        icol = f"iaas_{i}"
+                        if dcol not in tmp.columns:
+                            continue
+                        mask_dt = tmp[dcol].notna()
+                        if icol in tmp.columns:
+                            mask_iaas = tmp[icol].map(_es_si)
+                            mask = mask_dt & mask_iaas
+                        else:
+                            mask = mask_dt
+                        if mask.any():
+                            cols_take = id_cols + [dcol]
+                            df_i = tmp.loc[mask, cols_take].copy()
+                            df_i = df_i.rename(columns={dcol: "fec_inicio_iaas"})
+                            eventos.append(df_i)
+                    if not eventos:
+                        st.info("No hay fechas de inicio de IAAS registradas.")
                     else:
-                        cols = _iaas_cols(tmp)
-                        tmp["iaas_num"] = tmp[cols].applymap(_es_si).any(axis=1).astype(int) if cols else 0
-                    prev = (
-                        tmp.groupby("fecha_reporte")
-                        .agg(total_hosp=("es_paciente", "sum"),
-                             iaas_activos=("iaas_num", "sum"))
-                        .assign(prevalencia=lambda d: d["iaas_activos"] / d["total_hosp"].replace(0, pd.NA))
-                        .reset_index()
-                    )
-                    dias = st.slider("Rango de días para la curva", 14, 180, 60, key="slider_curva")
-                    if pd.notna(prev["fecha_reporte"].max()):
-                        desde = prev["fecha_reporte"].max() - pd.Timedelta(days=dias)
-                        prev = prev[prev["fecha_reporte"] >= desde]
-                    st.line_chart(prev.set_index("fecha_reporte")["prevalencia"].dropna(), use_container_width=True)
-                    st.caption(f"Prevalencia diaria (IAAS activos / hospitalizados) – Vista: {plano_sel}.")
+                        ev = pd.concat(eventos, ignore_index=True)
+                        # Deduplicación básica
+                        subset_cols = [c for c in ["nss", "cama", "fec_inicio_iaas", "ap_paterno", "ap_materno", "nombre"] if c in ev.columns]
+                        if subset_cols:
+                            ev = ev.drop_duplicates(subset=subset_cols)
+                        serie = (
+                            ev.groupby("fec_inicio_iaas")["fec_inicio_iaas"].count()
+                              .rename("iaas_nuevas").reset_index()
+                        )
+                        dias = st.slider("Rango de días para la curva", 14, 180, 60, key="slider_curva_inicio")
+                        fmax = serie["fec_inicio_iaas"].max()
+                        if pd.notna(fmax):
+                            desde = fmax - pd.Timedelta(days=dias)
+                            serie = serie[serie["fec_inicio_iaas"] >= desde]
+                        fig_inc = px.bar(serie, x="fec_inicio_iaas", y="iaas_nuevas",
+                                         labels={"fec_inicio_iaas": "Fecha de inicio", "iaas_nuevas": "IAAS nuevas"})
+                        fig_inc.update_layout(xaxis_tickangle=-30)
+                        st.plotly_chart(fig_inc, use_container_width=True)
+                        st.caption(f"Incidencia diaria por fecha de inicio – Vista: {plano_sel}.")
             except Exception as e:
                 st.error(f"No se pudo calcular la curva epidémica: {e}")
 
-        # --- Captura en INOSO (desde Viglancia/Vigilancia) ---
+        # --- Captura en INOSO (por fec_captura_1..4) desde Viglancia ---
         if mostrar_curva_captura:
-            st.subheader("📊 Captura en INOSO (casos)")
+            st.subheader("📊 Captura en INOSO (por fecha de captura)")
             try:
                 df_v = df_vig.copy()
                 if df_v.empty:
                     st.info("'Viglancia/Vigilancia' está vacía.")
                 else:
-                    fecha_cols = [c for c in [
-                        "fecha_reporte", "fec_ingreso", "fecha_muestra_1", "fecha_resultado_1",
-                        "fecha_muestra_2", "fecha_resultado_2", "fecha_muestra_3", "fecha_resultado_3",
-                        "fecha_muestra_4", "fecha_resultado_4"
-                    ] if c in df_v.columns]
-                    fecha_ref = fecha_cols[0] if fecha_cols else None
-                    if not fecha_ref:
-                        st.info("No hay columnas de fecha para graficar la captura.")
+                    id_cols = [c for c in ["nss", "cama", "ap_paterno", "ap_materno", "nombre"] if c in df_v.columns]
+                    caps = []
+                    for i in range(1, 5):
+                        dcol = f"fec_captura_{i}"
+                        if dcol not in df_v.columns:
+                            continue
+                        mask = df_v[dcol].notna()
+                        if mask.any():
+                            cols_take = id_cols + [dcol]
+                            df_i = df_v.loc[mask, cols_take].copy()
+                            df_i = df_i.rename(columns={dcol: "fec_captura"})
+                            caps.append(df_i)
+                    if not caps:
+                        # Respaldo: comportamiento previo
+                        fecha_cols = [c for c in [
+                            "fecha_reporte", "fec_ingreso", "fecha_muestra_1", "fecha_resultado_1",
+                            "fecha_muestra_2", "fecha_resultado_2", "fecha_muestra_3", "fecha_resultado_3",
+                            "fecha_muestra_4", "fecha_resultado_4"
+                        ] if c in df_v.columns]
+                        fecha_ref = fecha_cols[0] if fecha_cols else None
+                        if not fecha_ref:
+                            st.info("No hay columnas de fecha para graficar la captura.")
+                        else:
+                            df_cap = df_v[_es_paciente(df_v)].copy()
+                            df_cap = df_cap[pd.notna(df_cap[fecha_ref])]
+                            dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap_old")
+                            fecha_max = df_cap[fecha_ref].max()
+                            if pd.notna(fecha_max):
+                                desde = fecha_max - pd.Timedelta(days=dias)
+                                df_cap = df_cap[df_cap[fecha_ref] >= desde]
+                            serie = df_cap.groupby(fecha_ref)[fecha_ref].count().rename("casos").reset_index()
+                            fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos": "Casos/día"})
+                            fig_cap.update_layout(xaxis_tickangle=-30)
+                            st.plotly_chart(fig_cap, use_container_width=True)
+                            st.caption(f"Conteo diario de registros – Vista: {plano_sel}.")
                     else:
-                        df_cap = df_v[_es_paciente(df_v)].copy()
-                        df_cap = df_cap[pd.notna(df_cap[fecha_ref])]
+                        cap = pd.concat(caps, ignore_index=True)
+                        subset_cols = [c for c in ["nss", "cama", "fec_captura", "ap_paterno", "ap_materno", "nombre"] if c in cap.columns]
+                        if subset_cols:
+                            cap = cap.drop_duplicates(subset=subset_cols)
+                        serie = cap.groupby("fec_captura")["fec_captura"].count().rename("casos").reset_index()
                         dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap")
-                        fecha_max = df_cap[fecha_ref].max()
-                        if pd.notna(fecha_max):
-                            desde = fecha_max - pd.Timedelta(days=dias)
-                            df_cap = df_cap[df_cap[fecha_ref] >= desde]
-                        serie = df_cap.groupby(fecha_ref)[fecha_ref].count().rename("casos").reset_index()
-                        fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos": "Casos/día"})
+                        fmax = serie["fec_captura"].max()
+                        if pd.notna(fmax):
+                            desde = fmax - pd.Timedelta(days=dias)
+                            serie = serie[serie["fec_captura"] >= desde]
+                        fig_cap = px.bar(serie, x="fec_captura", y="casos", labels={"fec_captura": "Fecha de captura", "casos": "Casos/día"})
                         fig_cap.update_layout(xaxis_tickangle=-30)
                         st.plotly_chart(fig_cap, use_container_width=True)
-                        st.caption(f"Conteo diario de registros – Vista: {plano_sel}.")
+                        st.caption(f"Capturas diarias en INOSO – Vista: {plano_sel}.")
             except Exception as e:
                 st.error(f"No se pudo calcular la captura INOSO: {e}")
 
