@@ -550,7 +550,16 @@ def modulo_vigilancia():
 
     # --------- Cintilla de “Información actualizada” ---------
     # Requerimiento: SIEMPRE hora/fecha actuales del refresco (no del histórico ni del contenido)
-    now_ts = datetime.now()
+    # Hora local del usuario/operación (por defecto CDMX). Permite override por secretos/ENV.
+    import os
+    try:
+        from zoneinfo import ZoneInfo
+        tz_name = st.secrets.get("tz", os.environ.get("REDIAAS_TZ", "America/Mexico_City"))
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = None
+
+    now_ts = datetime.now(tz) if tz else datetime.now()
     fecha_txt = now_ts.strftime("%d-%m-%Y")
     hora_txt = now_ts.strftime("%H:%M:%S")
     st.markdown(
@@ -583,3 +592,4 @@ elif st.session_state.menu == "riesgo":
     st.info("Módulo de riesgo por cama disponible en otra sección del código.")
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
+
