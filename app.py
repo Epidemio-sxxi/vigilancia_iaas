@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 import os
 import unicodedata
+from datetime import datetime
 from typing import Optional
 
 # ---------------- Configuración global ----------------
@@ -40,7 +41,10 @@ SHEET_ID = st.secrets.get(
     os.environ.get("REDIAAS_SHEET_ID", "1dXRRepFI6l3t6kW6pZ3BJo1G63EESINCUOd6L98V9E0"),
 )
 
+# Nota: la pestaña operativa del día se llama **"Viglancia"** (sin segunda i).
+# Dejamos compatibilidad con "Vigilancia" por si en algún entorno existe así.
 DEFAULT_SHEET_GID_MAP = {
+    "Viglancia": st.secrets.get("gid_viglancia", os.environ.get("REDIAAS_GID_VIGLANCIA", "0")),
     "Vigilancia": st.secrets.get("gid_vigilancia", os.environ.get("REDIAAS_GID_VIGILANCIA", "0")),
     "Histórico":  st.secrets.get("gid_historico",  os.environ.get("REDIAAS_GID_HISTORICO",  "0")),
 }
@@ -48,23 +52,28 @@ DEFAULT_SHEET_GID_MAP = {
 GS_READY = False
 _gs_err: Optional[str] = None
 
+
 def _get_sa_info():
     sa = st.secrets.get("gcp_service_account")
     if not sa or not isinstance(sa, dict) or not sa.get("client_email"):
         raise RuntimeError("Falta st.secrets['gcp_service_account'] (JSON del Service Account)")
     return sa
 
+
 try:
     import gspread
     from google.oauth2.service_account import Credentials as GA_Credentials
+
     SCOPE = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
+
     def _gc_client():
         creds_dict = _get_sa_info()
         creds = GA_Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
         return gspread.authorize(creds)
+
     _ = st.secrets.get("gcp_service_account")
     GS_READY = True
 except Exception as e1:
@@ -72,26 +81,32 @@ except Exception as e1:
     try:
         import gspread  # type: ignore
         from oauth2client.service_account import ServiceAccountCredentials  # type: ignore
+
         SCOPE = [
             "https://www.googleapis.com/auth/spreadsheets.readonly",
             "https://www.googleapis.com/auth/drive.readonly",
         ]
+
         def _gc_client():
             creds_dict = _get_sa_info()
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
             return gspread.authorize(creds)
+
         _ = st.secrets.get("gcp_service_account")
         GS_READY = True
     except Exception as e2:
         _gs_err = f"OAuth error: {e1} | {e2}"
         GS_READY = False
 
+
 def _leer_csv_publico(sheet_id: str, gid: str) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
     return pd.read_csv(url)
 
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
+    """Lee una pestaña por nombre; si falla, intenta por CSV usando el gid del nombre dado."""
     if GS_READY:
         try:
             gc = _gc_client()
@@ -109,37 +124,60 @@ def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
     if df.empty:
         return df
 
+    # Limpieza de encabezados
     df.columns = [str(c).strip() for c in df.columns]
+
+    # Parseo de fechas (compat. pandas 2.x)
     for c in [
-        "fecha_reporte","fec_ingreso","fec_egreso","fec_inicio_sintomas","fec_toma_muestra",
-        "fecha_muestra_1","fecha_resultado_1","fecha_muestra_2","fecha_resultado_2",
-        "fecha_muestra_3","fecha_resultado_3","fecha_muestra_4","fecha_resultado_4",
+        "fecha_reporte", "fec_ingreso", "fec_egreso", "fec_inicio_sintomas", "fec_toma_muestra",
+        "fecha_muestra_1", "fecha_resultado_1", "fecha_muestra_2", "fecha_resultado_2",
+        "fecha_muestra_3", "fecha_resultado_3", "fecha_muestra_4", "fecha_resultado_4",
     ]:
         if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True, infer_datetime_format=True)
+            df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+
     return df
 
+
 def get_vigilancia(gid_map: dict) -> pd.DataFrame:
-    return _leer_tab(SHEET_ID, "Vigilancia", gid_map)
+    """Devuelve la hoja operativa del día.
+    Preferimos "Viglancia"; si no existe, probamos "Vigilancia"; si ninguna, DataFrame vacío.
+    """
+    # Intento 1: "Viglancia"
+    df = _leer_tab(SHEET_ID, "Viglancia", gid_map)
+    if not df.empty:
+        return df
+    # Intento 2: "Vigilancia"
+    df = _leer_tab(SHEET_ID, "Vigilancia", gid_map)
+    return df
+
 
 def get_historico(gid_map: dict) -> pd.DataFrame:
     return _leer_tab(SHEET_ID, "Histórico", gid_map)
+
 
 # ======================================================
 #        Utilidades de negocio
 # ======================================================
 ORDER_PISOS = [
-    "5B Norte","5B Sur","4B Norte","4B Sur","3B Norte","3B Sur",
-    "2B Norte","2B Sur","UCI","UTR","TMO","4A","3A","2A","1A",
+    "5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur",
+    "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A",
 ]
+
+
+def _strip_accents(text: str) -> str:
+    return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
+
+
+def _norm_piso(s):
+    return _strip_accents(str(s)).strip().upper()
+
 
 def _es_paciente(df: pd.DataFrame) -> pd.Series:
     if "status_paciente" in df.columns:
         return df["status_paciente"].astype(str).str.lower() != "sin paciente"
     return pd.Series([True] * len(df), index=df.index)
 
-def _strip_accents(text: str) -> str:
-    return ''.join(ch for ch in unicodedata.normalize('NFKD', text) if not unicodedata.combining(ch))
 
 def _es_si(val) -> bool:
     if val is None:
@@ -148,9 +186,11 @@ def _es_si(val) -> bool:
     s = _strip_accents(s)
     return s in {"si", "s", "true", "1"}
 
+
 def _iaas_cols(df: pd.DataFrame):
-    wanted = {"iaas_1","iaas_2","iaas_3","iaas_4"}
+    wanted = {"iaas_1", "iaas_2", "iaas_3", "iaas_4"}
     return [c for c in df.columns if c.lower() in wanted]
+
 
 def contar_iaas_totales(df: pd.DataFrame) -> int:
     cols = _iaas_cols(df)
@@ -158,17 +198,20 @@ def contar_iaas_totales(df: pd.DataFrame) -> int:
         return 0
     return int(df[cols].applymap(_es_si).sum(axis=1).sum())
 
+
 def contar_pacientes_con_iaas(df: pd.DataFrame) -> int:
     cols = _iaas_cols(df)
     if not cols:
         return 0
     return int(df[cols].applymap(_es_si).any(axis=1).sum())
 
+
 def contar_cultivos_si(df: pd.DataFrame) -> int:
-    cols = [c for c in ["cultivo_1","cultivo_2","cultivo_3","cultivo_4"] if c in df.columns]
+    cols = [c for c in ["cultivo_1", "cultivo_2", "cultivo_3", "cultivo_4"] if c in df.columns]
     if not cols:
         return 0
     return int(df[cols].applymap(_es_si).sum(axis=1).sum())
+
 
 def contar_microorganismos_si(df: pd.DataFrame) -> int:
     piezas = []
@@ -183,9 +226,10 @@ def contar_microorganismos_si(df: pd.DataFrame) -> int:
     germs = pd.concat(piezas, ignore_index=True).replace({"": pd.NA, "nan": pd.NA})
     return int(germs.dropna().nunique())
 
+
 def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     id_cols = [
-        "piso","servicio","cama","nss","ap_paterno","ap_materno","nombre","sexo","edad","fec_ingreso"
+        "piso", "servicio", "cama", "nss", "ap_paterno", "ap_materno", "nombre", "sexo", "edad", "fec_ingreso"
     ]
     id_cols = [c for c in id_cols if c in df_src.columns]
 
@@ -206,11 +250,11 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
         tmp = df_src[id_cols + use_cols].copy()
         rename_map = {v: k for k, v in cols_i.items() if v in tmp.columns}
         tmp = tmp.rename(columns=rename_map)
-        for c in ["fecha_muestra","fecha_resultado","fec_ingreso"]:
+        for c in ["fecha_muestra", "fecha_resultado", "fec_ingreso"]:
             if c in tmp.columns:
-                tmp[c] = pd.to_datetime(tmp[c], errors="coerce", dayfirst=True, infer_datetime_format=True)
+                tmp[c] = pd.to_datetime(tmp[c], errors="coerce", dayfirst=True)
         has_info = False
-        for c in ["germen","tipo_resultado","tipo_muestra","cultivo"]:
+        for c in ["germen", "tipo_resultado", "tipo_muestra", "cultivo"]:
             if c in tmp.columns:
                 s = tmp[c].astype(str).str.strip().ne("")
                 has_info = s if has_info is False else (has_info | s)
@@ -224,13 +268,11 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
 
     df_long = pd.concat(frames, ignore_index=True)
     ordered = [c for c in [
-        "no_cultivo","fecha_muestra","fecha_resultado","tipo_muestra","tipo_resultado","germen","resistencia","cultivo"
+        "no_cultivo", "fecha_muestra", "fecha_resultado", "tipo_muestra", "tipo_resultado", "germen", "resistencia", "cultivo"
     ] if c in df_long.columns]
     df_long = df_long[id_cols + ordered]
     return df_long
 
-def _norm_piso(s):
-    return str(s).strip().upper()
 
 def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
     if df is None or df.empty or not seleccion:
@@ -244,22 +286,25 @@ def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
     df2["__piso_norm"] = df2["piso"].map(_norm_piso)
     return df2[df2["__piso_norm"] == _norm_piso(seleccion)].drop(columns="__piso_norm")
 
+
 def stat_card(value: int, label: str, color_bg: str, icon: str):
     html = f"""
     <div style="background:{color_bg}; border-radius:14px; padding:16px 18px; color:white;
                 box-shadow:0 6px 18px rgba(0,0,0,.20);">
         <div style="font-size:34px; font-weight:800; line-height:1">{value:,}</div>
         <div style="display:flex; align-items:center; gap:10px; margin-top:6px;">
-            <span style="font-size:22px">{icon}</span>
+            <span style="font-size:22px" aria-hidden="true">{icon}</span>
             <span style="font-size:15px; opacity:.95">{label}</span>
         </div>
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
 
+
 # ======================================================
 #                     Módulo: Vigilancia
 # ======================================================
+
 def modulo_vigilancia():
     st.subheader("🔍 Vigilancia Activa por Sector Hospitalario")
 
@@ -271,26 +316,34 @@ def modulo_vigilancia():
     # Cargamos una vez para opciones del combo
     try:
         df_vig_opts = get_vigilancia(gid_map)
-        opciones_raw = sorted(df_vig_opts["piso"].dropna().astype(str).map(str.strip).unique()) \
-                       if "piso" in df_vig_opts.columns else []
+        opciones_raw = (
+            sorted(df_vig_opts["piso"].dropna().astype(str).map(str.strip).unique())
+            if "piso" in df_vig_opts.columns else []
+        )
     except Exception:
         df_vig_opts = pd.DataFrame()
         opciones_raw = []
 
-    # Ordenar con la lista de referencia
+    # Ordenar con la lista de referencia (mantiene extras alfabéticos al final)
     def ordena_pisos(opts):
-        base = [p for p in ORDER_PISOS if p in opts]
-        extra = [p for p in opts if p not in ORDER_PISOS]
-        return base + sorted(extra)
+        norm_map = {o: _norm_piso(o) for o in opts}
+        base = [p for p in ORDER_PISOS if any(norm_map[o] == _norm_piso(p) for o in opts)]
+        base_original = []
+        for p in base:
+            for o in opts:
+                if norm_map[o] == _norm_piso(p):
+                    base_original.append(o)
+                    break
+        extra = [o for o in opts if _norm_piso(o) not in {_norm_piso(p) for p in ORDER_PISOS}]
+        return base_original + sorted(extra)
 
     pisos_ordenados = ordena_pisos(opciones_raw)
     opciones_sector = ["UMAE completa"] + pisos_ordenados
 
     # Renderizamos selector en una columna angosta; si hay plano, lo mostramos a la derecha
-    # Detectaremos el valor después para saber si reservamos espacio del plano o no
     col_sel_only = st.columns([1.1])[0]
     with col_sel_only:
-        plano_sel = st.selectbox("", options=opciones_sector, label_visibility="collapsed")
+        plano_sel = st.selectbox("", options=opciones_sector, index=0, label_visibility="collapsed", key="sel_piso")
 
     # --------- Preparamos data filtrada según selección ---------
     df_vig = get_vigilancia(gid_map)
@@ -311,20 +364,18 @@ def modulo_vigilancia():
                 st.caption("No hay imagen para este sector. (Coloca un PNG en data/planos con el nombre del piso).")
 
     # --------- Fila 2: Izquierda (módulos) + Derecha (info/servicios/contenidos)
-    # - Si UMAE completa: esta fila queda justo debajo del selector (no reservamos espacio de mapa)
-    # - Si sector: queda alineada con el plano
     col_left, col_right = st.columns([1.1, 3.9])
 
     with col_left:
         st.markdown("### 🏥 Módulos disponibles")
-        mostrar_curva_epidemica = st.checkbox("Curva Epidémica de IAAS", value=False)
-        mostrar_curva_captura   = st.checkbox("Captura en INOSO", value=False)
-        mostrar_reporte_cult    = st.checkbox("Reporte de cultivos", value=False)
-        mostrar_censo           = st.checkbox("Censo nominal", value=False)
+        mostrar_curva_epidemica = st.checkbox("Curva Epidémica de IAAS", value=False, key="cb_curva")
+        mostrar_curva_captura   = st.checkbox("Captura en INOSO", value=False, key="cb_inoso")
+        mostrar_reporte_cult    = st.checkbox("Reporte de cultivos", value=False, key="cb_cult")
+        mostrar_censo           = st.checkbox("Censo nominal", value=False, key="cb_censo")
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
     with col_right:
-        # ===== Información general =====
+        # ===== Información general (siempre desde Viglancia/Vigilancia) =====
         st.markdown("### Información general")
         total_pac    = int(len(df_censo))
         iaas_total   = contar_iaas_totales(df_censo)
@@ -352,7 +403,7 @@ def modulo_vigilancia():
 
         st.markdown("---")
 
-        # --- Curva epidémica ---
+        # --- Curva epidémica (desde Histórico) ---
         if mostrar_curva_epidemica:
             st.subheader("📈 Curva Epidémica de IAAS")
             try:
@@ -379,24 +430,23 @@ def modulo_vigilancia():
                     if pd.notna(prev["fecha_reporte"].max()):
                         desde = prev["fecha_reporte"].max() - pd.Timedelta(days=dias)
                         prev = prev[prev["fecha_reporte"] >= desde]
-                    st.line_chart(prev.set_index("fecha_reporte")[["prevalencia"]].dropna(),
-                                  use_container_width=True)
+                    st.line_chart(prev.set_index("fecha_reporte")["prevalencia"].dropna(), use_container_width=True)
                     st.caption(f"Prevalencia diaria (IAAS activos / hospitalizados) – Vista: {plano_sel}.")
             except Exception as e:
                 st.error(f"No se pudo calcular la curva epidémica: {e}")
 
-        # --- Captura en INOSO ---
+        # --- Captura en INOSO (desde Viglancia/Vigilancia) ---
         if mostrar_curva_captura:
             st.subheader("📊 Captura en INOSO (casos)")
             try:
                 df_v = df_vig.copy()
                 if df_v.empty:
-                    st.info("'Vigilancia' está vacía.")
+                    st.info("'Viglancia/Vigilancia' está vacía.")
                 else:
                     fecha_cols = [c for c in [
-                        "fecha_reporte","fec_ingreso","fecha_muestra_1","fecha_resultado_1",
-                        "fecha_muestra_2","fecha_resultado_2","fecha_muestra_3","fecha_resultado_3",
-                        "fecha_muestra_4","fecha_resultado_4"
+                        "fecha_reporte", "fec_ingreso", "fecha_muestra_1", "fecha_resultado_1",
+                        "fecha_muestra_2", "fecha_resultado_2", "fecha_muestra_3", "fecha_resultado_3",
+                        "fecha_muestra_4", "fecha_resultado_4"
                     ] if c in df_v.columns]
                     fecha_ref = fecha_cols[0] if fecha_cols else None
                     if not fecha_ref:
@@ -410,20 +460,20 @@ def modulo_vigilancia():
                             desde = fecha_max - pd.Timedelta(days=dias)
                             df_cap = df_cap[df_cap[fecha_ref] >= desde]
                         serie = df_cap.groupby(fecha_ref)[fecha_ref].count().rename("casos").reset_index()
-                        fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos":"Casos/día"})
+                        fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos": "Casos/día"})
                         fig_cap.update_layout(xaxis_tickangle=-30)
                         st.plotly_chart(fig_cap, use_container_width=True)
                         st.caption(f"Conteo diario de registros – Vista: {plano_sel}.")
             except Exception as e:
                 st.error(f"No se pudo calcular la captura INOSO: {e}")
 
-        # --- Reporte de cultivos ---
+        # --- Reporte de cultivos (desde Viglancia/Vigilancia) ---
         if mostrar_reporte_cult:
             st.subheader("🧪 Reporte de cultivos")
             try:
                 df_v = df_vig.copy()
                 if df_v.empty:
-                    st.info("'Vigilancia' está vacía.")
+                    st.info("'Viglancia/Vigilancia' está vacía.")
                 else:
                     df_lab = lab_desde_vigilancia(df_v)
                     if "cultivo" in df_lab.columns:
@@ -473,7 +523,7 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo generar el reporte de cultivos: {e}")
 
-        # --- Censo nominal ---
+        # --- Censo nominal (desde Viglancia/Vigilancia) ---
         if mostrar_censo:
             st.subheader("📒 Censo nominal")
             try:
@@ -485,9 +535,9 @@ def modulo_vigilancia():
                     if cols_iaas:
                         df_v = df_v[df_v[cols_iaas].applymap(_es_si).any(axis=1)]
                     keep = [
-                        "cama","status_paciente","servicio","fec_ingreso","ap_paterno","ap_materno","nombre","nss",
-                        "ag_med","edad","sexo","iaas_1","iaas_2","iaas_3","iaas_4",
-                        "tp_iaas_1","tp_iaas_2","tp_iaas_3","tp_iaas_4","tp_aislamiento"
+                        "cama", "status_paciente", "servicio", "fec_ingreso", "ap_paterno", "ap_materno", "nombre", "nss",
+                        "ag_med", "edad", "sexo", "iaas_1", "iaas_2", "iaas_3", "iaas_4",
+                        "tp_iaas_1", "tp_iaas_2", "tp_iaas_3", "tp_iaas_4", "tp_aislamiento"
                     ]
                     to_hide = {"Unnamed: 0", "index", "#", "No", "no"}
                     cols_finales = [c for c in keep if c in df_v.columns and c not in to_hide]
@@ -499,43 +549,20 @@ def modulo_vigilancia():
                 st.error(f"No se pudo mostrar el censo nominal: {e}")
 
     # --------- Cintilla de “Información actualizada” ---------
-    # Buscamos el timestamp máximo entre columnas de fecha conocidas
-    try:
-        df_hist_for_ts = get_historico(gid_map)
-    except Exception:
-        df_hist_for_ts = pd.DataFrame()
-
-    def _max_dt(df: pd.DataFrame) -> Optional[pd.Timestamp]:
-        if df is None or df.empty:
-            return None
-        date_cols = [c for c in df.columns if "fecha" in c.lower() or "fec_" in c.lower()]
-        cand = []
-        for c in date_cols:
-            if pd.api.types.is_datetime64_any_dtype(df[c]):
-                cand.append(df[c].max())
-        if not cand:
-            return None
-        return pd.Series(cand).max()
-
-    ts_v = _max_dt(df_vig)
-    ts_h = _max_dt(df_hist_for_ts)
-    ts = ts_v
-    if ts_h is not None and (ts is None or ts_h > ts):
-        ts = ts_h
-    if ts is None:
-        ts = pd.Timestamp.now()
-
-    fecha_txt = ts.strftime("%d-%m-%Y")
-    hora_txt  = ts.strftime("%H:%M:%S")
+    # Requerimiento: SIEMPRE hora/fecha actuales del refresco (no del histórico ni del contenido)
+    now_ts = datetime.now()
+    fecha_txt = now_ts.strftime("%d-%m-%Y")
+    hora_txt = now_ts.strftime("%H:%M:%S")
     st.markdown(
         f"""
-        <div style="margin-top:16px; padding:10px 16px; background:rgba(255,255,255,0.06);
-                    border-radius:10px; text-align:center;">
+        <div style=\"margin-top:16px; padding:10px 16px; background:rgba(255,255,255,0.06);
+                    border-radius:10px; text-align:center;\">
             <strong>Información actualizada al {fecha_txt} a las {hora_txt}</strong>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
 
 # ---------------- Menú principal ----------------
 if "menu" not in st.session_state:
