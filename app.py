@@ -592,5 +592,3 @@ elif st.session_state.menu == "riesgo":
     st.info("Módulo de riesgo por cama disponible en otra sección del código.")
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
-
-
