@@ -12,7 +12,6 @@ from typing import Optional, List
 st.set_page_config(layout="wide", page_title="Monitoreo de IAAS - REDIAAS")
 
 # ====== Tema oscuro forzado (UI + Plotly) ======
-# 1) Plotly por defecto en oscuro + fondos transparentes para integrarse al negro
 px.defaults.template = "plotly_dark"
 pio.templates.default = "plotly_dark"
 
@@ -23,19 +22,36 @@ def _darken_plot(fig):
     )
     return fig
 
-# 2) CSS que fuerza fondo negro y texto claro en toda la app (independiente del tema local)
+# ====== CSS oscuro + FIX del header que tapaba el título ======
 st.markdown("""
 <style>
 :root { color-scheme: dark; }
-html, body, [data-testid="stAppViewContainer"],
-[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSidebar"] {
-  background-color: #000000 !important;
+
+/* Fondo global negro (excepto header) */
+html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+  background-color: #000 !important;
+  color: #eaeaea !important;
 }
-.block-container { padding-top: 1rem; }
+
+/* Header fijo transparente, sin sombras ni bordes */
+[data-testid="stHeader"]{
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  border-bottom: 0 !important;
+}
+
+/* Espacio extra bajo el header para que no se encime el contenido */
+.block-container,
+[data-testid="stAppViewContainer"] .main .block-container{
+  padding-top: 4.75rem !important;
+}
+
 [data-testid="stAppViewContainer"] * { color: #eaeaea; }
 h1, h2, h3, h4, h5, h6 { color: #f0f0f0 !important; }
-a, .st-emotion-cache-zz3vza, .st-emotion-cache-1kyxreq { color: #d0e3ff !important; }
+a { color: #d0e3ff !important; }
 
+/* Controles */
 div.stButton > button {
   background: #111 !important; color: #eaeaea !important;
   border: 1px solid #333 !important; box-shadow: none !important;
@@ -45,13 +61,22 @@ div[data-baseweb="select"] * { color: #eaeaea !important; }
 div[data-baseweb="input"] { background: #111 !important; }
 div[data-testid="stSelectbox"] div[role="combobox"] { background: #111 !important; }
 
+/* Tablas / DataFrame */
 div[data-testid="stDataFrame"] { background-color: #0a0a0a !important; }
 thead tr th { background: #0f0f0f !important; color: #eaeaea !important; }
 tbody tr td { background: #0a0a0a !important; color: #eaeaea !important; }
 hr { border-color: #2a2a2a !important; }
 
-[data-testid="stNotification"] { background: #121212 !important; color: #eaeaea !important; }
-.stAlert { background: #121212 !important; color: #eaeaea !important; }
+/* Alertas */
+[data-testid="stNotification"], .stAlert { background: #121212 !important; color: #eaeaea !important; }
+
+/* Extra en móviles */
+@media (max-width: 768px){
+  .block-container,
+  [data-testid="stAppViewContainer"] .main .block-container{
+    padding-top: 5.5rem !important;
+  }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -192,12 +217,10 @@ def get_vigilancia(gid_map: dict) -> pd.DataFrame:
     """Devuelve la hoja operativa del día.
     Preferimos "Viglancia"; si no existe, probamos "Vigilancia"; si ninguna, DataFrame vacío.
     """
-    # Intento 1: "Viglancia"
-    df = _leer_tab(SHEET_ID, "Viglancia", gid_map)
+    df = _leer_tab(SHEET_ID, "Viglancia", gid_map)  # Intento 1
     if not df.empty:
         return df
-    # Intento 2: "Vigilancia"
-    df = _leer_tab(SHEET_ID, "Vigilancia", gid_map)
+    df = _leer_tab(SHEET_ID, "Vigilancia", gid_map)  # Intento 2
     return df
 
 
@@ -485,7 +508,6 @@ def modulo_vigilancia():
                         st.info("No hay fechas de inicio de IAAS registradas.")
                     else:
                         ev = pd.concat(eventos, ignore_index=True)
-                        # Deduplicación básica
                         subset_cols = [c for c in ["nss", "cama", "fec_inicio_iaas", "ap_paterno", "ap_materno", "nombre"] if c in ev.columns]
                         if subset_cols:
                             ev = ev.drop_duplicates(subset=subset_cols)
@@ -596,8 +618,7 @@ def modulo_vigilancia():
                                 desde = fecha_max - pd.Timedelta(days=dias)
                                 df_lab = df_lab[df_lab[fecha_ref] >= desde]
 
-                        # --- Treemap simple (sin selección) y con regla de "Pendiente" ---
-                        # Regla: si germen está missing y hay fecha_muestra, contar como "Pendiente".
+                        # Treemap de microorganismos (+ regla "Pendiente")
                         if "germen" in df_lab.columns:
                             df_lab["germen_plot"] = (
                                 df_lab["germen"].astype(str).str.strip()
@@ -610,10 +631,7 @@ def modulo_vigilancia():
                             mask_pend = df_lab["germen_plot"].isna() & df_lab["fecha_muestra"].notna()
                             df_lab.loc[mask_pend, "germen_plot"] = "Pendiente"
 
-                        top = (
-                            df_lab["germen_plot"].dropna()
-                            .value_counts().reset_index()
-                        )
+                        top = df_lab["germen_plot"].dropna().value_counts().reset_index()
                         top.columns = ["Microorganismo", "Casos"]
 
                         if not top.empty:
@@ -622,10 +640,8 @@ def modulo_vigilancia():
                             fig_top.update_traces(root_color="lightgrey")
                             st.plotly_chart(fig_top, use_container_width=True)
 
-                        # Métrica de registros
+                        # Métrica y barras por tipo de muestra
                         st.metric(f"Registros de laboratorio ({plano_sel})", len(df_lab))
-
-                        # 2) Distribución por tipo de muestra
                         if "tipo_muestra" in df_lab.columns:
                             por_muestra = (
                                 df_lab["tipo_muestra"].astype(str).str.strip()
@@ -639,7 +655,7 @@ def modulo_vigilancia():
                                 fig_m.update_layout(xaxis_tickangle=-30)
                                 st.plotly_chart(fig_m, use_container_width=True)
 
-                        # 3) Tabla detallada
+                        # Tabla detallada
                         drop_cols = {"Unnamed: 0", "index", "no_cultivo", "cultivo", "fec_ingreso"}
                         cols = [c for c in df_lab.columns if c not in drop_cols]
                         st.dataframe(df_lab[cols], use_container_width=True)
@@ -672,7 +688,6 @@ def modulo_vigilancia():
                 st.error(f"No se pudo mostrar el censo nominal: {e}")
 
     # --------- Cintilla de “Información actualizada” ---------
-    # Requerimiento: SIEMPRE hora/fecha actuales del refresco (no del histórico ni del contenido)
     import os as _os
     try:
         from zoneinfo import ZoneInfo
@@ -686,8 +701,8 @@ def modulo_vigilancia():
     hora_txt = now_ts.strftime("%H:%M:%S")
     st.markdown(
         f"""
-        <div style=\"margin-top:16px; padding:10px 16px; background:rgba(255,255,255,0.06);
-                    border-radius:10px; text-align:center;\">
+        <div style="margin-top:16px; padding:10px 16px; background:rgba(255,255,255,0.06);
+                    border-radius:10px; text-align:center;">
             <strong>Información actualizada al {fecha_txt} a las {hora_txt}</strong>
         </div>
         """,
@@ -709,8 +724,6 @@ if st.session_state.menu is None:
             st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
-    # (Se conserva el módulo de riesgo por cama por si lo usas)
-    # Si lo deseas ocultar, elimina este bloque y el botón del menú.
     st.info("Módulo de riesgo por cama disponible en otra sección del código.")
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
