@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import os
 import unicodedata
 from datetime import datetime
@@ -9,6 +10,50 @@ from typing import Optional, List
 
 # ---------------- Configuración global ----------------
 st.set_page_config(layout="wide", page_title="Monitoreo de IAAS - REDIAAS")
+
+# ====== Tema oscuro forzado (UI + Plotly) ======
+# 1) Plotly por defecto en oscuro + fondos transparentes para integrarse al negro
+px.defaults.template = "plotly_dark"
+pio.templates.default = "plotly_dark"
+
+def _darken_plot(fig):
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)"
+    )
+    return fig
+
+# 2) CSS que fuerza fondo negro y texto claro en toda la app (independiente del tema local)
+st.markdown("""
+<style>
+:root { color-scheme: dark; }
+html, body, [data-testid="stAppViewContainer"],
+[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stSidebar"] {
+  background-color: #000000 !important;
+}
+.block-container { padding-top: 1rem; }
+[data-testid="stAppViewContainer"] * { color: #eaeaea; }
+h1, h2, h3, h4, h5, h6 { color: #f0f0f0 !important; }
+a, .st-emotion-cache-zz3vza, .st-emotion-cache-1kyxreq { color: #d0e3ff !important; }
+
+div.stButton > button {
+  background: #111 !important; color: #eaeaea !important;
+  border: 1px solid #333 !important; box-shadow: none !important;
+}
+div.stCheckbox > label, label { color: #eaeaea !important; }
+div[data-baseweb="select"] * { color: #eaeaea !important; }
+div[data-baseweb="input"] { background: #111 !important; }
+div[data-testid="stSelectbox"] div[role="combobox"] { background: #111 !important; }
+
+div[data-testid="stDataFrame"] { background-color: #0a0a0a !important; }
+thead tr th { background: #0f0f0f !important; color: #eaeaea !important; }
+tbody tr td { background: #0a0a0a !important; color: #eaeaea !important; }
+hr { border-color: #2a2a2a !important; }
+
+[data-testid="stNotification"] { background: #121212 !important; color: #eaeaea !important; }
+.stAlert { background: #121212 !important; color: #eaeaea !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ---------------- Encabezado institucional ----------------
 col1, col2, col3 = st.columns([1, 6, 1])
@@ -394,7 +439,7 @@ def modulo_vigilancia():
         with cC:  stat_card(cultivos_cnt, "Cultivos",           "#1E90FF", "🧪")
         with cD:  stat_card(micro_cnt,    "Microorganismos",    "#F39C12", "🔬")
 
-        # ===== Servicios top 5 =====
+        # ===== Servicios con más pacientes (Top 5) =====
         st.markdown("### Servicios con más pacientes (Top 5)")
         if "servicio" in df_censo.columns and not df_censo.empty:
             top_srv = (
@@ -455,6 +500,7 @@ def modulo_vigilancia():
                             serie = serie[serie["fec_inicio_iaas"] >= desde]
                         fig_inc = px.bar(serie, x="fec_inicio_iaas", y="iaas_nuevas",
                                          labels={"fec_inicio_iaas": "Fecha de inicio", "iaas_nuevas": "IAAS nuevas"})
+                        _darken_plot(fig_inc)
                         fig_inc.update_layout(xaxis_tickangle=-30)
                         st.plotly_chart(fig_inc, use_container_width=True)
                         st.caption(f"Incidencia diaria por fecha de inicio – Vista: {plano_sel}.")
@@ -501,6 +547,7 @@ def modulo_vigilancia():
                                 df_cap = df_cap[df_cap[fecha_ref] >= desde]
                             serie = df_cap.groupby(fecha_ref)[fecha_ref].count().rename("casos").reset_index()
                             fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos": "Casos/día"})
+                            _darken_plot(fig_cap)
                             fig_cap.update_layout(xaxis_tickangle=-30)
                             st.plotly_chart(fig_cap, use_container_width=True)
                             st.caption(f"Conteo diario de registros – Vista: {plano_sel}.")
@@ -515,7 +562,9 @@ def modulo_vigilancia():
                         if pd.notna(fmax):
                             desde = fmax - pd.Timedelta(days=dias)
                             serie = serie[serie["fec_captura"] >= desde]
-                        fig_cap = px.bar(serie, x="fec_captura", y="casos", labels={"fec_captura": "Fecha de captura", "casos": "Casos/día"})
+                        fig_cap = px.bar(serie, x="fec_captura", y="casos",
+                                         labels={"fec_captura": "Fecha de captura", "casos": "Casos/día"})
+                        _darken_plot(fig_cap)
                         fig_cap.update_layout(xaxis_tickangle=-30)
                         st.plotly_chart(fig_cap, use_container_width=True)
                         st.caption(f"Capturas diarias en INOSO – Vista: {plano_sel}.")
@@ -569,6 +618,7 @@ def modulo_vigilancia():
 
                         if not top.empty:
                             fig_top = px.treemap(top, path=["Microorganismo"], values="Casos")
+                            _darken_plot(fig_top)
                             fig_top.update_traces(root_color="lightgrey")
                             st.plotly_chart(fig_top, use_container_width=True)
 
@@ -585,6 +635,7 @@ def modulo_vigilancia():
                             por_muestra.columns = ["Tipo de muestra", "Registros"]
                             if not por_muestra.empty:
                                 fig_m = px.bar(por_muestra, x="Tipo de muestra", y="Registros")
+                                _darken_plot(fig_m)
                                 fig_m.update_layout(xaxis_tickangle=-30)
                                 st.plotly_chart(fig_m, use_container_width=True)
 
