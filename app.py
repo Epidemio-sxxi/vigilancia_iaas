@@ -22,7 +22,7 @@ def _darken_plot(fig):
     )
     return fig
 
-# ====== CSS oscuro + FIX del header que tapaba el título ======
+# ====== CSS oscuro + FIX del header + tarjetas para logos ======
 st.markdown("""
 <style>
 :root { color-scheme: dark; }
@@ -70,6 +70,19 @@ hr { border-color: #2a2a2a !important; }
 /* Alertas */
 [data-testid="stNotification"], .stAlert { background: #121212 !important; color: #eaeaea !important; }
 
+/* Tarjeta clara para logos (asegura contraste en fondo negro) */
+.logo-card{
+  background:#ffffff;
+  border-radius:12px;
+  padding:6px 8px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:0 2px 6px rgba(0,0,0,.25);
+}
+.logo-card img{ display:block; height:72px; }
+@media (max-width:768px){ .logo-card img{ height:58px; } }
+
 /* Extra en móviles */
 @media (max-width: 768px){
   .block-container,
@@ -82,11 +95,17 @@ hr { border-color: #2a2a2a !important; }
 
 # ---------------- Encabezado institucional ----------------
 col1, col2, col3 = st.columns([1, 6, 1])
+
 with col1:
-    st.image(
-        "https://raw.githubusercontent.com/Epidemio-sxxi/vigilancia_iaas/main/assets/imss_logo.png",
-        width=90,
+    st.markdown(
+        """
+        <div class="logo-card">
+          <img src="https://raw.githubusercontent.com/Epidemio-sxxi/vigilancia_iaas/main/assets/imss_logo.png" alt="IMSS">
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+
 with col2:
     st.markdown(
         """
@@ -96,10 +115,15 @@ with col2:
         """,
         unsafe_allow_html=True,
     )
+
 with col3:
-    st.image(
-        "https://raw.githubusercontent.com/Epidemio-sxxi/vigilancia_iaas/main/assets/residencia_epi_logo.png",
-        width=90,
+    st.markdown(
+        """
+        <div class="logo-card">
+          <img src="https://raw.githubusercontent.com/Epidemio-sxxi/vigilancia_iaas/main/assets/residencia_epi_logo.png" alt="Residencia de Epidemiología">
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 # ======================================================
@@ -346,7 +370,7 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     return df_long
 
 
-def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
+def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pdDataFrame:
     if df is None or df.empty or not seleccion:
         return df
     if _norm_piso(seleccion) in {"UMAE COMPLETA", "UMAE", "TODOS", "ALL"}:
@@ -497,7 +521,7 @@ def modulo_vigilancia():
                     else:
                         ev = pd.concat(eventos, ignore_index=True)
 
-                        # Agrupar por día (no por fecha-hora) y formatear etiqueta DD/MM/AAAA
+                        # Agrupar por día y usar etiqueta DD/MM/AAAA
                         serie = (
                             ev.groupby(ev["fec_inicio_iaas"].dt.date)
                               .size().reset_index(name="iaas_nuevas")
@@ -522,7 +546,7 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo calcular la curva epidémica: {e}")
 
-        # --- Captura en INOSO por fec_captura_1..4 (usando Histórico ∪ Viglancia) ---
+        # --- Captura en INOSO por fec_captura_1..4 (Histórico ∪ Viglancia) ---
         if mostrar_curva_captura:
             st.subheader("📊 Captura en INOSO (por fecha de captura)")
             try:
@@ -551,7 +575,7 @@ def modulo_vigilancia():
                     else:
                         cap = pd.concat(caps, ignore_index=True)
 
-                        # Agrupar por día y formatear etiqueta DD/MM/AAAA
+                        # Agrupar por día y usar etiqueta DD/MM/AAAA
                         serie = (
                             cap.groupby(cap["fec_captura"].dt.date)
                                .size().reset_index(name="casos")
