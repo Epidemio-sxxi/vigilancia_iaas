@@ -496,22 +496,27 @@ def modulo_vigilancia():
                         st.info("No hay fechas de inicio de IAAS registradas.")
                     else:
                         ev = pd.concat(eventos, ignore_index=True)
-                        subset_cols = [c for c in ["nss", "cama", "fec_inicio_iaas", "ap_paterno", "ap_materno", "nombre"] if c in ev.columns]
-                        if subset_cols:
-                            ev = ev.drop_duplicates(subset=subset_cols)
+
+                        # Agrupar por día (no por fecha-hora) y formatear etiqueta DD/MM/AAAA
                         serie = (
-                            ev.groupby("fec_inicio_iaas")["fec_inicio_iaas"].count()
-                              .rename("iaas_nuevas").reset_index()
+                            ev.groupby(ev["fec_inicio_iaas"].dt.date)
+                              .size().reset_index(name="iaas_nuevas")
+                              .rename(columns={"fec_inicio_iaas": "fecha_dia"})
                         )
+                        serie["fecha_dt"] = pd.to_datetime(serie["fecha_dia"])
                         dias = st.slider("Rango de días para la curva", 14, 180, 60, key="slider_curva_inicio")
-                        fmax = serie["fec_inicio_iaas"].max()
+                        fmax = serie["fecha_dt"].max()
                         if pd.notna(fmax):
                             desde = fmax - pd.Timedelta(days=dias)
-                            serie = serie[serie["fec_inicio_iaas"] >= desde]
-                        fig_inc = px.bar(serie, x="fec_inicio_iaas", y="iaas_nuevas",
-                                         labels={"fec_inicio_iaas": "Fecha de inicio", "iaas_nuevas": "IAAS nuevas"})
+                            serie = serie[serie["fecha_dt"] >= desde]
+                        serie["fecha_label"] = serie["fecha_dt"].dt.strftime("%d/%m/%Y")
+
+                        fig_inc = px.bar(
+                            serie, x="fecha_label", y="iaas_nuevas",
+                            labels={"fecha_label": "Fecha", "iaas_nuevas": "IAAS nuevas"}
+                        )
                         _darken_plot(fig_inc)
-                        fig_inc.update_layout(xaxis_tickangle=-30)
+                        fig_inc.update_xaxes(type="category", tickangle=-30)
                         st.plotly_chart(fig_inc, use_container_width=True)
                         st.caption(f"Incidencia diaria por fecha de inicio – Vista: {plano_sel}.")
             except Exception as e:
@@ -545,19 +550,27 @@ def modulo_vigilancia():
                         st.info("No hay fechas de captura registradas (fec_captura_1..4).")
                     else:
                         cap = pd.concat(caps, ignore_index=True)
-                        subset_cols = [c for c in ["nss", "cama", "fec_captura", "ap_paterno", "ap_materno", "nombre"] if c in cap.columns]
-                        if subset_cols:
-                            cap = cap.drop_duplicates(subset=subset_cols)
-                        serie = cap.groupby("fec_captura")["fec_captura"].count().rename("casos").reset_index()
+
+                        # Agrupar por día y formatear etiqueta DD/MM/AAAA
+                        serie = (
+                            cap.groupby(cap["fec_captura"].dt.date)
+                               .size().reset_index(name="casos")
+                               .rename(columns={"fec_captura": "fecha_dia"})
+                        )
+                        serie["fecha_dt"] = pd.to_datetime(serie["fecha_dia"])
                         dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap")
-                        fmax = serie["fec_captura"].max()
+                        fmax = serie["fecha_dt"].max()
                         if pd.notna(fmax):
                             desde = fmax - pd.Timedelta(days=dias)
-                            serie = serie[serie["fec_captura"] >= desde]
-                        fig_cap = px.bar(serie, x="fec_captura", y="casos",
-                                         labels={"fec_captura": "Fecha de captura", "casos": "Casos/día"})
+                            serie = serie[serie["fecha_dt"] >= desde]
+                        serie["fecha_label"] = serie["fecha_dt"].dt.strftime("%d/%m/%Y")
+
+                        fig_cap = px.bar(
+                            serie, x="fecha_label", y="casos",
+                            labels={"fecha_label": "Fecha", "casos": "Casos/día"}
+                        )
                         _darken_plot(fig_cap)
-                        fig_cap.update_layout(xaxis_tickangle=-30)
+                        fig_cap.update_xaxes(type="category", tickangle=-30)
                         st.plotly_chart(fig_cap, use_container_width=True)
                         st.caption(f"Capturas diarias en INOSO – Vista: {plano_sel}.")
             except Exception as e:
