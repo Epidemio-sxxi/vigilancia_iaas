@@ -462,20 +462,9 @@ def modulo_vigilancia():
         with cC:  stat_card(cultivos_cnt, "Cultivos",           "#1E90FF", "🧪")
         with cD:  stat_card(micro_cnt,    "Microorganismos",    "#F39C12", "🔬")
 
-        # ===== Servicios con más pacientes (Top 5) =====
-        st.markdown("### Servicios con más pacientes (Top 5)")
-        if "servicio" in df_censo.columns and not df_censo.empty:
-            top_srv = (
-                df_censo.groupby("servicio")["servicio"].count()
-                .sort_values(ascending=False).head(5).reset_index(name="pacientes")
-            )
-            st.dataframe(top_srv, use_container_width=True, hide_index=True)
-        else:
-            st.info("No hay columna 'servicio' para mostrar el Top 5.")
-
         st.markdown("---")
 
-        # --- Curva epidémica (Incidencia por fec_inicio_iaas_1..4) usando Histórico ∪ Viglancia ---
+        # --- Curva epidémica (fec_inicio_iaas_1..4) usando Histórico ∪ Viglancia ---
         if mostrar_curva_epidemica:
             st.subheader("📈 Curva Epidémica de IAAS (inicio de síntomas)")
             try:
@@ -485,7 +474,6 @@ def modulo_vigilancia():
                 if tmp.empty:
                     st.info("No hay datos para construir la curva en esta vista.")
                 else:
-                    # Construye eventos a partir de fec_inicio_iaas_1..4 (validando iaas_i cuando exista)
                     id_cols = [c for c in ["nss", "cama", "ap_paterno", "ap_materno", "nombre"] if c in tmp.columns]
                     eventos = []
                     for i in range(1, 5):
@@ -529,50 +517,32 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo calcular la curva epidémica: {e}")
 
-        # --- Captura en INOSO (por fec_captura_1..4) desde Viglancia ---
+        # --- Captura en INOSO por fec_captura_1..4 (usando Histórico ∪ Viglancia) ---
         if mostrar_curva_captura:
             st.subheader("📊 Captura en INOSO (por fecha de captura)")
             try:
-                df_v = df_vig.copy()
-                if df_v.empty:
-                    st.info("'Viglancia/Vigilancia' está vacía.")
+                df_hist = get_historico(gid_map)
+                df_union = pd.concat([df_hist, df_vig], ignore_index=True, sort=False)
+                tmp = filtra_por_piso(df_union.copy(), plano_sel)
+
+                if tmp.empty:
+                    st.info("No hay datos para la curva de captura en esta vista.")
                 else:
-                    id_cols = [c for c in ["nss", "cama", "ap_paterno", "ap_materno", "nombre"] if c in df_v.columns]
+                    id_cols = [c for c in ["nss", "cama", "ap_paterno", "ap_materno", "nombre"] if c in tmp.columns]
                     caps = []
                     for i in range(1, 5):
                         dcol = f"fec_captura_{i}"
-                        if dcol not in df_v.columns:
+                        if dcol not in tmp.columns:
                             continue
-                        mask = df_v[dcol].notna()
+                        mask = tmp[dcol].notna()
                         if mask.any():
                             cols_take = id_cols + [dcol]
-                            df_i = df_v.loc[mask, cols_take].copy()
+                            df_i = tmp.loc[mask, cols_take].copy()
                             df_i = df_i.rename(columns={dcol: "fec_captura"})
                             caps.append(df_i)
+
                     if not caps:
-                        # Respaldo: comportamiento previo
-                        fecha_cols = [c for c in [
-                            "fecha_reporte", "fec_ingreso", "fecha_muestra_1", "fecha_resultado_1",
-                            "fecha_muestra_2", "fecha_resultado_2", "fecha_muestra_3", "fecha_resultado_3",
-                            "fecha_muestra_4", "fecha_resultado_4"
-                        ] if c in df_v.columns]
-                        fecha_ref = fecha_cols[0] if fecha_cols else None
-                        if not fecha_ref:
-                            st.info("No hay columnas de fecha para graficar la captura.")
-                        else:
-                            df_cap = df_v[_es_paciente(df_v)].copy()
-                            df_cap = df_cap[pd.notna(df_cap[fecha_ref])]
-                            dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap_old")
-                            fecha_max = df_cap[fecha_ref].max()
-                            if pd.notna(fecha_max):
-                                desde = fecha_max - pd.Timedelta(days=dias)
-                                df_cap = df_cap[df_cap[fecha_ref] >= desde]
-                            serie = df_cap.groupby(fecha_ref)[fecha_ref].count().rename("casos").reset_index()
-                            fig_cap = px.bar(serie, x=fecha_ref, y="casos", labels={"casos": "Casos/día"})
-                            _darken_plot(fig_cap)
-                            fig_cap.update_layout(xaxis_tickangle=-30)
-                            st.plotly_chart(fig_cap, use_container_width=True)
-                            st.caption(f"Conteo diario de registros – Vista: {plano_sel}.")
+                        st.info("No hay fechas de captura registradas (fec_captura_1..4).")
                     else:
                         cap = pd.concat(caps, ignore_index=True)
                         subset_cols = [c for c in ["nss", "cama", "fec_captura", "ap_paterno", "ap_materno", "nombre"] if c in cap.columns]
