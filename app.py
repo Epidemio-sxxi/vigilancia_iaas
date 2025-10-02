@@ -372,6 +372,60 @@ def stat_card(value: int, label: str, color_bg: str, icon: str):
     """
     st.markdown(html, unsafe_allow_html=True)
 
+# ======================================================
+#        Módulo: Riesgo IAAS por cama (INSERTADO)
+#        (tomado del código 1, sin cambios en lógica)
+# ======================================================
+
+def modulo_riesgo():
+    st.subheader("🛏️ Mapa de Riesgo de IAAS por Cama")
+
+    @st.cache_data
+    def cargar_datos():
+        df_coords = pd.read_csv("plantilla_coordenadas_camas.csv")
+        df_iaas = pd.read_csv("rediaas.csv")
+        return df_coords, df_iaas
+
+    df_coords, df_iaas = cargar_datos()
+
+    df_riesgo = (
+        df_iaas.groupby("cama")["iaas_sino"]
+        .agg(["sum", "count"])
+        .reset_index()
+        .rename(columns={"sum": "casos_iaas", "count": "total_pacientes"})
+    )
+    df_riesgo["porcentaje_iaas"] = 100 * df_riesgo["casos_iaas"] / df_riesgo["total_pacientes"]
+    df_final = pd.merge(df_coords, df_riesgo[["cama", "porcentaje_iaas"]], on="cama", how="left")
+    df_final["porcentaje_iaas"] = df_final["porcentaje_iaas"].fillna(0)
+
+    orden_pisos = [
+        "5B Norte", "5B Sur", "4B Norte", "4B Sur", "3B Norte", "3B Sur",
+        "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A",
+    ]
+    df_final["piso"] = pd.Categorical(df_final["piso"], categories=orden_pisos, ordered=True)
+
+    piso_sel = st.selectbox("Selecciona el piso a visualizar:", options=df_final["piso"].dropna().unique())
+    df_piso = df_final[df_final["piso"] == piso_sel].copy()
+    df_piso["porcentaje_iaas_str"] = df_piso["porcentaje_iaas"].map("{:.2f}%".format)
+
+    fig = px.scatter(
+        df_piso,
+        x="coord_x",
+        y="coord_y",
+        color="porcentaje_iaas",
+        color_continuous_scale=[(0.0, "green"), (0.5, "orange"), (1.0, "red")],
+        range_color=(0, 100),
+        text="cama",
+        labels={"coord_x": "Coordenada X", "coord_y": "Coordenada Y", "porcentaje_iaas": "% IAAS"},
+        hover_data={"cama": True, "porcentaje_iaas_str": True, "porcentaje_iaas": False},
+        height=650,
+    )
+    fig.update_traces(marker=dict(size=25), textposition="top center")
+    fig.update_layout(title=f"🛏️ Mapa de Riesgo – Piso {piso_sel}", title_font=dict(size=16), yaxis_autorange="reversed")
+
+    st.plotly_chart(fig, use_container_width=True)
+    st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
+
 
 # ======================================================
 #                     Módulo: Vigilancia
@@ -399,7 +453,7 @@ def modulo_vigilancia():
     # Ordenar con la lista de referencia (mantiene extras alfabéticos al final)
     def ordena_pisos(opts):
         norm_map = {o: _norm_piso(o) for o in opts}
-        base = [p for p in ORDER_PISOS if any(norm_map[o] == _norm_piso(p) for o in opts)]
+        base = [p for p in ORDER_PISOS si any(norm_map[o] == _norm_piso(p) for o in opts)]
         base_original = []
         for p in base:
             for o in opts:
@@ -591,7 +645,7 @@ def modulo_vigilancia():
                         st.info("Sin cultivos positivos en esta vista.")
                     else:
                         # Filtro temporal
-                        fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab.columns else (
+                        fecha_ref = "fecha_muestra" si "fecha_muestra" in df_lab.columns else (
                             "fecha_resultado" if "fecha_resultado" in df_lab.columns else None
                         )
                         if fecha_ref:
@@ -707,6 +761,6 @@ if st.session_state.menu is None:
             st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
-    st.info("Módulo de riesgo por cama disponible en otra sección del código.")
+    modulo_riesgo()
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
