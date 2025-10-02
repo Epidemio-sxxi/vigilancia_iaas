@@ -453,7 +453,7 @@ def modulo_vigilancia():
     # Ordenar con la lista de referencia (mantiene extras alfabéticos al final)
     def ordena_pisos(opts):
         norm_map = {o: _norm_piso(o) for o in opts}
-        base = [p for p in ORDER_PISOS si any(norm_map[o] == _norm_piso(p) for o in opts)]
+        base = [p for p in ORDER_PISOS if any(norm_map[o] == _norm_piso(p) for o in opts)]
         base_original = []
         for p in base:
             for o in opts:
@@ -645,7 +645,7 @@ def modulo_vigilancia():
                         st.info("Sin cultivos positivos en esta vista.")
                     else:
                         # Filtro temporal
-                        fecha_ref = "fecha_muestra" si "fecha_muestra" in df_lab.columns else (
+                        fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab.columns else (
                             "fecha_resultado" if "fecha_resultado" in df_lab.columns else None
                         )
                         if fecha_ref:
