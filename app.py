@@ -122,11 +122,13 @@ DEFAULT_SHEET_GID_MAP = {
 GS_READY = False
 _gs_err: Optional[str] = None
 
+
 def _get_sa_info():
     sa = st.secrets.get("gcp_service_account")
     if not sa or not isinstance(sa, dict) or not sa.get("client_email"):
         raise RuntimeError("Falta st.secrets['gcp_service_account'] (JSON del Service Account)")
     return sa
+
 
 try:
     import gspread
@@ -166,9 +168,11 @@ except Exception as e1:
         _gs_err = f"OAuth error: {e1} | {e2}"
         GS_READY = False
 
+
 def _leer_csv_publico(sheet_id: str, gid: str) -> pd.DataFrame:
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
     return pd.read_csv(url)
+
 
 @st.cache_data(ttl=10, show_spinner=False)
 def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
@@ -208,6 +212,7 @@ def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
 
     return df
 
+
 def get_vigilancia(gid_map: dict) -> pd.DataFrame:
     """Devuelve la hoja operativa del día.
     Preferimos "Viglancia"; si no existe, probamos "Vigilancia"; si ninguna, DataFrame vacío.
@@ -218,8 +223,10 @@ def get_vigilancia(gid_map: dict) -> pd.DataFrame:
     df = _leer_tab(SHEET_ID, "Vigilancia", gid_map)  # Intento 2
     return df
 
+
 def get_historico(gid_map: dict) -> pd.DataFrame:
     return _leer_tab(SHEET_ID, "Histórico", gid_map)
+
 
 # ======================================================
 #        Utilidades de negocio
@@ -229,16 +236,20 @@ ORDER_PISOS = [
     "2B Norte", "2B Sur", "UCI", "UTR", "TMO", "4A", "3A", "2A", "1A",
 ]
 
+
 def _strip_accents(text: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch))
 
+
 def _norm_piso(s):
     return _strip_accents(str(s)).strip().upper()
+
 
 def _es_paciente(df: pd.DataFrame) -> pd.Series:
     if "status_paciente" in df.columns:
         return df["status_paciente"].astype(str).str.lower() != "sin paciente"
     return pd.Series([True] * len(df), index=df.index)
+
 
 def _es_si(val) -> bool:
     if val is None:
@@ -247,9 +258,11 @@ def _es_si(val) -> bool:
     s = _strip_accents(s)
     return s in {"si", "s", "true", "1"}
 
+
 def _iaas_cols(df: pd.DataFrame):
     wanted = {"iaas_1", "iaas_2", "iaas_3", "iaas_4"}
     return [c for c in df.columns if c.lower() in wanted]
+
 
 def contar_iaas_totales(df: pd.DataFrame) -> int:
     cols = _iaas_cols(df)
@@ -257,17 +270,20 @@ def contar_iaas_totales(df: pd.DataFrame) -> int:
         return 0
     return int(df[cols].applymap(_es_si).sum(axis=1).sum())
 
+
 def contar_pacientes_con_iaas(df: pd.DataFrame) -> int:
     cols = _iaas_cols(df)
     if not cols:
         return 0
     return int(df[cols].applymap(_es_si).any(axis=1).sum())
 
+
 def contar_cultivos_si(df: pd.DataFrame) -> int:
     cols = [c for c in ["cultivo_1", "cultivo_2", "cultivo_3", "cultivo_4"] if c in df.columns]
     if not cols:
         return 0
     return int(df[cols].applymap(_es_si).sum(axis=1).sum())
+
 
 def contar_microorganismos_si(df: pd.DataFrame) -> int:
     piezas = []
@@ -281,6 +297,7 @@ def contar_microorganismos_si(df: pd.DataFrame) -> int:
         return 0
     germs = pd.concat(piezas, ignore_index=True).replace({"": pd.NA, "nan": pd.NA})
     return int(germs.dropna().nunique())
+
 
 def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     id_cols = [
@@ -328,6 +345,7 @@ def lab_desde_vigilancia(df_src: pd.DataFrame) -> pd.DataFrame:
     df_long = df_long[id_cols + ordered]
     return df_long
 
+
 def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
     if df is None or df.empty or not seleccion:
         return df
@@ -339,6 +357,7 @@ def filtra_por_piso(df: pd.DataFrame, seleccion: Optional[str]) -> pd.DataFrame:
     df2 = df.copy()
     df2["__piso_norm"] = df2["piso"].map(_norm_piso)
     return df2[df2["__piso_norm"] == _norm_piso(seleccion)].drop(columns="__piso_norm")
+
 
 def stat_card(value: int, label: str, color_bg: str, icon: str):
     html = f"""
@@ -353,340 +372,6 @@ def stat_card(value: int, label: str, color_bg: str, icon: str):
     """
     st.markdown(html, unsafe_allow_html=True)
 
-# --------- Utilidades para coordenadas y plano ---------
-def _load_coords_for_sector(sector: str) -> pd.DataFrame:
-    """
-    Busca primero data/coords/{sector}.csv; si no existe, carga data/coords/coords_camas.csv y filtra por 'piso' == sector.
-    Requiere columnas: cama, x, y (piso opcional). x,y en píxeles sobre el PNG del plano.
-    """
-    try:
-        path_sector = os.path.join("data", "coords", f"{sector}.csv")
-        path_global = os.path.join("data", "coords", "coords_camas.csv")
-
-        if os.path.exists(path_sector):
-            dfc = pd.read_csv(path_sector)
-        elif os.path.exists(path_global):
-            dfc = pd.read_csv(path_global)
-            if "piso" in dfc.columns:
-                dfc = dfc[dfc["piso"].astype(str).str.strip() == str(sector).strip()]
-        else:
-            return pd.DataFrame()
-
-        # Normalizaciones
-        dfc.columns = [str(c).strip() for c in dfc.columns]
-        for req in ["cama", "x", "y"]:
-            if req not in dfc.columns:
-                return pd.DataFrame()
-        dfc["cama"] = dfc["cama"].astype(str).str.strip()
-        # coerce numeric
-        dfc["x"] = pd.to_numeric(dfc["x"], errors="coerce")
-        dfc["y"] = pd.to_numeric(dfc["y"], errors="coerce")
-        return dfc.dropna(subset=["x","y","cama"])
-    except Exception:
-        return pd.DataFrame()
-
-def _open_floor_image(sector: str):
-    """Abre el PNG del sector y devuelve (PIL.Image, width, height) o (None, None, None)."""
-    try:
-        from PIL import Image
-        img_path = os.path.join("data", "planos", f"{sector}.png")
-        if not os.path.exists(img_path):
-            return None, None, None
-        im = Image.open(img_path)
-        return im, im.size[0], im.size[1]
-    except Exception:
-        return None, None, None
-
-def _color_riesgo(nivel: str) -> str:
-    return {
-        "ALTO": "#E74C3C",
-        "MEDIO": "#F39C12",
-        "BAJO": "#2ECC71",
-    }.get(nivel.upper(), "#888888")
-
-# ======================================================
-#            Módulo: Riesgos de IAAS por cama
-# ======================================================
-
-def _tiene_iaas_row(row) -> bool:
-    cols = [c for c in ["iaas_1","iaas_2","iaas_3","iaas_4"] if c in row.index]
-    return any(_es_si(row[c]) for c in cols)
-
-def _tiene_cultivo_pos_row(row) -> bool:
-    flags = [f"cultivo_{i}" for i in range(1,5)]
-    g_cols = [f"germen_{i}" for i in range(1,5)]
-    for f, g in zip(flags, g_cols):
-        if f in row.index and g in row.index:
-            if _es_si(row[f]) and str(row[g]).strip() not in {"", "nan", "None"}:
-                return True
-    return False
-
-def _aislamiento_nivel(texto: str) -> Optional[str]:
-    if not texto:
-        return None
-    t = _strip_accents(str(texto)).upper().strip()
-    if "AEROS" in t:
-        return "AEROSOLES"
-    if "CONTACT" in t:
-        return "CONTACTO"
-    if "GOTA" in t or "DROPLET" in t:
-        return "GOTAS"
-    return t if t else None
-
-def _calcular_riesgo_y_motivo(row) -> tuple[str, str]:
-    """Regla explícita:
-       - IAAS presente -> ALTO
-       - Aislamiento CONTACTO o AEROSOLES -> ALTO
-       - Aislamiento GOTAS o cultivo positivo -> MEDIO
-       - En otro caso -> BAJO
-    """
-    if _tiene_iaas_row(row):
-        return "ALTO", "IAAS confirmada en cama"
-    aisl = _aislamiento_nivel(row.get("tp_aislamiento", ""))
-    if aisl in {"CONTACTO", "AEROSOLES"}:
-        return "ALTO", f"Aislamiento {aisl}"
-    if aisl in {"GOTAS"}:
-        return "MEDIO", "Aislamiento por gotas"
-    if _tiene_cultivo_pos_row(row):
-        return "MEDIO", "Cultivo positivo registrado"
-    return "BAJO", "Sin IAAS, sin aislamiento de alto riesgo, sin cultivo positivo"
-
-def modulo_riesgo_cama():
-    st.subheader("📊 Riesgos de IAAS por cama")
-
-    gid_map = DEFAULT_SHEET_GID_MAP
-
-    # Opciones de sector
-    try:
-        df_vig_opts = get_vigilancia(gid_map)
-        opciones_raw = (
-            sorted(df_vig_opts["piso"].dropna().astype(str).map(str.strip).unique())
-            if "piso" in df_vig_opts.columns else []
-        )
-    except Exception:
-        df_vig_opts = pd.DataFrame()
-        opciones_raw = []
-
-    def ordena_pisos(opts):
-        norm_map = {o: _norm_piso(o) for o in opts}
-        base = [p for p in ORDER_PISOS if any(norm_map[o] == _norm_piso(p) for o in opts)]
-        base_original = []
-        for p in base:
-            for o in opts:
-                if norm_map[o] == _norm_piso(p):
-                    base_original.append(o)
-                    break
-        extra = [o for o in opts if _norm_piso(o) not in {_norm_piso(p) for p in ORDER_PISOS}]
-        return base_original + sorted(extra)
-
-    pisos_ordenados = ordena_pisos(opciones_raw)
-    opciones_sector = ["UMAE completa"] + pisos_ordenados
-
-    csel = st.columns([1.1])[0]
-    with csel:
-        sector = st.selectbox("", options=opciones_sector, index=0, label_visibility="collapsed", key="sel_piso_riesgo")
-
-    # Carga y filtrado
-    df_vig = get_vigilancia(gid_map)
-    if df_vig.empty:
-        st.warning("No hay datos en 'Viglancia/Vigilancia'.")
-        return
-
-    df_vig = df_vig.copy()
-    df_vig = df_vig[_es_paciente(df_vig)]
-    df_vig = filtra_por_piso(df_vig, sector)
-
-    # Mostrar plano si aplica y dibujar marcadores
-    if _norm_piso(sector) not in {"UMAE COMPLETA", "UMAE", "TODOS", "ALL"}:
-        col_sel, col_plano = st.columns([1.1, 3.9])
-        with col_sel:
-            st.empty()
-        with col_plano:
-            imagen_path = os.path.join("data", "planos", f"{sector}.png")
-            if os.path.exists(imagen_path):
-                st.image(imagen_path, use_container_width=True, caption=f"Plano sector {sector}")
-            else:
-                st.caption("No hay imagen para este sector. (Coloca un PNG en data/planos con el nombre del piso).")
-
-    if df_vig.empty:
-        st.info("Sin pacientes en la vista seleccionada.")
-        return
-
-    base_cols = [
-        "piso","servicio","cama","status_paciente","ap_paterno","ap_materno","nombre","nss",
-        "edad","sexo","tp_aislamiento","fec_ingreso",
-        "iaas_1","iaas_2","iaas_3","iaas_4",
-        "tp_iaas_1","tp_iaas_2","tp_iaas_3","tp_iaas_4",
-        "germen_1","germen_2","germen_3","germen_4",
-        "fecha_muestra_1","fecha_muestra_2","fecha_muestra_3","fecha_muestra_4",
-        "fecha_resultado_1","fecha_resultado_2","fecha_resultado_3","fecha_resultado_4",
-        "cultivo_1","cultivo_2","cultivo_3","cultivo_4"
-    ]
-    cols_take = [c for c in base_cols if c in df_vig.columns]
-    work = df_vig[cols_take].copy()
-
-    # Calcular riesgo y motivo
-    riesgo_list, motivo_list = [], []
-    for _, row in work.iterrows():
-        nivel, motivo = _calcular_riesgo_y_motivo(row)
-        riesgo_list.append(nivel)
-        motivo_list.append(motivo)
-    work["riesgo"] = riesgo_list
-    work["motivo_riesgo"] = motivo_list
-
-    # Tarjetas resumen
-    total = len(work)
-    n_alto  = int((work["riesgo"]=="ALTO").sum())
-    n_medio = int((work["riesgo"]=="MEDIO").sum())
-    n_bajo  = int((work["riesgo"]=="BAJO").sum())
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: stat_card(total,  "Camas con paciente", "#6C63FF", "🛏️")
-    with c2: stat_card(n_alto, "Riesgo ALTO",        "#E74C3C", "🚨")
-    with c3: stat_card(n_medio,"Riesgo MEDIO",       "#F39C12", "⚠️")
-    with c4: stat_card(n_bajo, "Riesgo BAJO",        "#2ECC71", "✅")
-
-    st.markdown("---")
-
-    # ======= Overlay de marcadores en plano (si hay coords y plano) =======
-    if _norm_piso(sector) not in {"UMAE COMPLETA", "UMAE", "TODOS", "ALL"}:
-        coords = _load_coords_for_sector(sector)
-        img, W, H = _open_floor_image(sector)
-
-        if coords.empty:
-            st.info("No se encontraron coordenadas para este sector en data/coords.")
-        elif img is None:
-            st.info("No se encontró el PNG del plano para superponer marcadores.")
-        else:
-            # Fusionar por cama (normalizada)
-            def _norm_cama(x):
-                return str(x).strip().upper()
-            work["_cama_key"] = work["cama"].astype(str).map(_norm_cama) if "cama" in work.columns else ""
-            coords["_cama_key"] = coords["cama"].astype(str).map(_norm_cama)
-            m = pd.merge(coords, work, on="_cama_key", how="inner", suffixes=("_coord",""))
-            if m.empty:
-                st.info("No hubo coincidencias entre 'cama' del censo y el CSV de coordenadas.")
-            else:
-                # Campos para hover
-                def _first_nonempty(row, cols):
-                    for c in cols:
-                        if c in row and str(row[c]).strip() not in {"", "nan", "None"}:
-                            return str(row[c]).strip()
-                    return ""
-
-                m["germen_any"] = m.apply(lambda r: _first_nonempty(r, ["germen_1","germen_2","germen_3","germen_4"]), axis=1)
-                m["iaas_any"]   = m.apply(lambda r: "Sí" if _tiene_iaas_row(r) else "No", axis=1)
-
-                color_map = {"ALTO":"#E74C3C","MEDIO":"#F39C12","BAJO":"#2ECC71"}
-                fig = px.scatter(
-                    m,
-                    x="x", y="y",
-                    color="riesgo",
-                    hover_name="cama",
-                    hover_data={
-                        "servicio": True,
-                        "tp_aislamiento": True,
-                        "iaas_any": True,
-                        "germen_any": True,
-                        "x": False, "y": False
-                    },
-                    color_discrete_map=color_map
-                )
-
-                # Fondo con la imagen del plano
-                fig.add_layout_image(
-                    dict(
-                        source=img,
-                        xref="x", yref="y",
-                        x=0, y=0,
-                        sizex=W, sizey=H,
-                        sizing="stretch",
-                        layer="below"
-                    )
-                )
-                fig.update_xaxes(visible=False, range=[0, W])
-                fig.update_yaxes(visible=False, range=[H, 0])  # invertimos Y
-                fig.update_traces(marker=dict(size=10, line=dict(width=0)))
-                _darken_plot(fig)
-                st.plotly_chart(fig, use_container_width=True)
-                st.caption("Marcadores por cama sobre el plano. Hover: cama, servicio, aislamiento, IAAS, germen.")
-
-    # ======= Gráficos de distribución (barras) =======
-    colA, colB = st.columns(2)
-    with colA:
-        dist = work["riesgo"].value_counts().reset_index()
-        dist.columns = ["Nivel de riesgo","Camas"]
-        if not dist.empty:
-            fig = px.bar(dist, x="Nivel de riesgo", y="Camas")
-            _darken_plot(fig)
-            fig.update_traces(marker_line_width=0)
-            st.plotly_chart(fig, use_container_width=True)
-
-    with colB:
-        if "servicio" in work.columns:
-            por_serv = (
-                work.groupby(["servicio","riesgo"]).size()
-                    .reset_index(name="camas")
-            )
-            if not por_serv.empty:
-                fig2 = px.bar(por_serv, x="servicio", y="camas", color="riesgo", barmode="stack",
-                              color_discrete_map={"ALTO":"#E74C3C","MEDIO":"#F39C12","BAJO":"#2ECC71"})
-                _darken_plot(fig2)
-                fig2.update_layout(xaxis_tickangle=-30)
-                st.plotly_chart(fig2, use_container_width=True)
-
-    # ======= Filtros y tabla =======
-    cfil1, cfil2, cfil3 = st.columns(3)
-    with cfil1:
-        filtro_riesgo = st.multiselect("Filtrar por riesgo", ["ALTO","MEDIO","BAJO"], default=[])
-    with cfil2:
-        filtro_serv = st.multiselect("Filtrar por servicio", sorted(work["servicio"].dropna().astype(str).unique().tolist()) if "servicio" in work.columns else [], default=[])
-    with cfil3:
-        solo_iaas = st.checkbox("Solo camas con IAAS", value=False)
-
-    view = work.copy()
-    if filtro_riesgo:
-        view = view[view["riesgo"].isin(filtro_riesgo)]
-    if filtro_serv and "servicio" in view.columns:
-        view = view[view["servicio"].astype(str).isin(filtro_serv)]
-    if solo_iaas:
-        view = view[view.apply(_tiene_iaas_row, axis=1)]
-
-    # Orden sugerido: ALTO > MEDIO > BAJO y luego por cama
-    orden = pd.CategoricalDtype(categories=["ALTO","MEDIO","BAJO"], ordered=True)
-    view["__orden_riesgo"] = view["riesgo"].astype(orden)
-    if "cama" in view.columns:
-        view = view.sort_values(["__orden_riesgo","cama"])
-    else:
-        view = view.sort_values(["__orden_riesgo"])
-    view = view.drop(columns="__orden_riesgo")
-
-    cols_vista = [
-        "piso","servicio","cama","riesgo","motivo_riesgo","tp_aislamiento",
-        "iaas_1","tp_iaas_1","iaas_2","tp_iaas_2","iaas_3","tp_iaas_3","iaas_4","tp_iaas_4",
-        "germen_1","germen_2","germen_3","germen_4",
-        "fecha_muestra_1","fecha_resultado_1","fecha_muestra_2","fecha_resultado_2",
-        "fecha_muestra_3","fecha_resultado_3","fecha_muestra_4","fecha_resultado_4",
-        "nss","ap_paterno","ap_materno","nombre","edad","sexo","fec_ingreso"
-    ]
-    cols_vista = [c for c in cols_vista if c in view.columns]
-
-    st.markdown("### Censo por cama con nivel de riesgo")
-    st.dataframe(view[cols_vista], use_container_width=True)
-
-    # Descarga CSV
-    csv = view[cols_vista].to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Descargar CSV (riesgo por cama)",
-        data=csv,
-        file_name=f"riesgo_por_cama_{_strip_accents(sector).replace(' ','_')}.csv",
-        mime="text/csv"
-    )
-
-    st.caption(
-        "Reglas de riesgo: IAAS presente o aislamiento de Contacto/Aerosoles → **ALTO**; "
-        "Gotas o cultivo positivo → **MEDIO**; resto → **BAJO**."
-    )
 
 # ======================================================
 #                     Módulo: Vigilancia
@@ -721,7 +406,7 @@ def modulo_vigilancia():
                 if norm_map[o] == _norm_piso(p):
                     base_original.append(o)
                     break
-        extra = [o for o in opts si _norm_piso(o) not in {_norm_piso(p) for p in ORDER_PISOS}]
+        extra = [o for o in opts if _norm_piso(o) not in {_norm_piso(p) for p in ORDER_PISOS}]
         return base_original + sorted(extra)
 
     pisos_ordenados = ordena_pisos(opciones_raw)
@@ -955,7 +640,7 @@ def modulo_vigilancia():
 
                         # Tabla detallada
                         drop_cols = {"Unnamed: 0", "index", "no_cultivo", "cultivo", "fec_ingreso"}
-                        cols = [c for c in df_lab.columns si c not in drop_cols]
+                        cols = [c for c in df_lab.columns if c not in drop_cols]
                         st.dataframe(df_lab[cols], use_container_width=True)
             except Exception as e:
                 st.error(f"No se pudo generar el reporte de cultivos: {e}")
@@ -977,7 +662,7 @@ def modulo_vigilancia():
                         "tp_iaas_1", "tp_iaas_2", "tp_iaas_3", "tp_iaas_4", "tp_aislamiento"
                     ]
                     to_hide = {"Unnamed: 0", "index", "#", "No", "no"}
-                    cols_finales = [c for c in keep si c in df_v.columns and c not in to_hide]
+                    cols_finales = [c for c in keep if c in df_v.columns and c not in to_hide]
                     if not cols_finales:
                         st.info("No se encontraron las columnas esperadas para el censo.")
                     else:
@@ -1007,6 +692,7 @@ def modulo_vigilancia():
         unsafe_allow_html=True,
     )
 
+
 # ---------------- Menú principal ----------------
 if "menu" not in st.session_state:
     st.session_state.menu = None
@@ -1021,6 +707,6 @@ if st.session_state.menu is None:
             st.session_state.menu = "vigilancia"
 
 elif st.session_state.menu == "riesgo":
-    modulo_riesgo_cama()
+    st.info("Módulo de riesgo por cama disponible en otra sección del código.")
 elif st.session_state.menu == "vigilancia":
     modulo_vigilancia()
