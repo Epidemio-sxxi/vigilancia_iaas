@@ -103,12 +103,17 @@ with col3:
     )
 
 # ======================================================
-#     Conexión a Google Sheets (Service Account + CSV)
-#     (sin UI; se resuelve en automático)
+#     Conexión a Google Sheets / Drive
 # ======================================================
 SHEET_ID = st.secrets.get(
     "sheet_id",
     os.environ.get("REDIAAS_SHEET_ID", "1dXRRepFI6l3t6kW6pZ3BJo1G63EESINCUOd6L98V9E0"),
+)
+
+# Carpeta de Drive donde Apps Script guarda historico1, historico2, ...
+HIST_FOLDER_ID = st.secrets.get(
+    "hist_folder_id",
+    os.environ.get("REDIAAS_HIST_FOLDER_ID", "1S-AgZ5YvxTbCmrMMlG69nUi8UOOM0yqk"),
 )
 
 # Nota: la pestaña operativa del día se llama **"Viglancia"** (sin segunda i).
@@ -120,6 +125,7 @@ DEFAULT_SHEET_GID_MAP = {
 }
 
 GS_READY = False
+DRIVE_READY = False
 _gs_err: Optional[str] = None
 
 
@@ -133,19 +139,27 @@ def _get_sa_info():
 try:
     import gspread
     from google.oauth2.service_account import Credentials as GA_Credentials
+    from googleapiclient.discovery import build
 
     SCOPE = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
 
-    def _gc_client():
+    def _google_creds():
         creds_dict = _get_sa_info()
-        creds = GA_Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
-        return gspread.authorize(creds)
+        return GA_Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
+
+    def _gc_client():
+        return gspread.authorize(_google_creds())
+
+    def _drive_service():
+        return build("drive", "v3", credentials=_google_creds())
 
     _ = st.secrets.get("gcp_service_account")
     GS_READY = True
+    DRIVE_READY = True
+
 except Exception as e1:
     _gs_err = str(e1)
     try:
@@ -157,16 +171,24 @@ except Exception as e1:
             "https://www.googleapis.com/auth/drive.readonly",
         ]
 
-        def _gc_client():
+        def _legacy_creds():
             creds_dict = _get_sa_info()
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
-            return gspread.authorize(creds)
+            return ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+
+        def _gc_client():
+            return gspread.authorize(_legacy_creds())
+
+        # En fallback legado mantenemos desactivada Drive API.
+        def _drive_service():
+            raise RuntimeError("Drive API no disponible en fallback OAuth2 legacy.")
 
         _ = st.secrets.get("gcp_service_account")
         GS_READY = True
+        DRIVE_READY = False
     except Exception as e2:
         _gs_err = f"OAuth error: {e1} | {e2}"
         GS_READY = False
+        DRIVE_READY = False
 
 
 def _leer_csv_publico(sheet_id: str, gid: str) -> pd.DataFrame:
@@ -203,8 +225,7 @@ def _leer_tab(sheet_id: str, tab_name: str, gid_map: dict) -> pd.DataFrame:
         "fecha_muestra_1", "fecha_resultado_1", "fecha_muestra_2", "fecha_resultado_2",
         "fecha_muestra_3", "fecha_resultado_3", "fecha_muestra_4", "fecha_resultado_4",
     ]
-    # Nuevas columnas múltiples: fec_inicio_iaas_1..4 y fec_captura_1..4
-    fecha_cols_nuevas = [f"fec_inicio_iaas_{i}" for i in range(1,5)] + [f"fec_captura_{i}" for i in range(1,5)]
+    fecha_cols_nuevas = [f"fec_inicio_iaas_{i}" for i in range(1, 5)] + [f"fec_captura_{i}" for i in range(1, 5)]
 
     for c in fecha_cols_basicas + fecha_cols_nuevas:
         if c in df.columns:
@@ -226,6 +247,122 @@ def get_vigilancia(gid_map: dict) -> pd.DataFrame:
 
 def get_historico(gid_map: dict) -> pd.DataFrame:
     return _leer_tab(SHEET_ID, "Histórico", gid_map)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def listar_archivos_historicos(folder_id: str) -> List[dict]:
+    """
+    Lista spreadsheets dentro de la carpeta de históricos.
+    Regresa [{'id': ..., 'name': ..., 'createdTime': ...}, ...]
+    """
+    if not DRIVE_READY:
+        return []
+
+    try:
+        service = _drive_service()
+        q = (
+            f"'{folder_id}' in parents "
+            f"and mimeType='application/vnd.google-apps.spreadsheet' "
+            f"and trashed=false"
+        )
+
+        resp = service.files().list(
+            q=q,
+            fields="files(id,name,createdTime)",
+            orderBy="createdTime asc"
+        ).execute()
+
+        files = resp.get("files", [])
+
+        def _es_historico(nombre: str) -> bool:
+            s = str(nombre).strip().lower()
+            return s.startswith("historico")
+
+        files = [f for f in files if _es_historico(f.get("name", ""))]
+        return files
+
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def leer_historico_por_id(spreadsheet_id: str) -> pd.DataFrame:
+    if not GS_READY:
+        return pd.DataFrame()
+
+    try:
+        gc = _gc_client()
+        sh = gc.open_by_key(spreadsheet_id)
+        ws = sh.worksheet("Histórico")
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty:
+            return df
+
+        df.columns = [str(c).strip() for c in df.columns]
+
+        fecha_cols_basicas: List[str] = [
+            "fecha_reporte", "fec_ingreso", "fec_egreso", "fec_inicio_sintomas", "fec_toma_muestra",
+            "fecha_muestra_1", "fecha_resultado_1", "fecha_muestra_2", "fecha_resultado_2",
+            "fecha_muestra_3", "fecha_resultado_3", "fecha_muestra_4", "fecha_resultado_4",
+        ]
+        fecha_cols_nuevas = [f"fec_inicio_iaas_{i}" for i in range(1, 5)] + [f"fec_captura_{i}" for i in range(1, 5)]
+
+        for c in fecha_cols_basicas + fecha_cols_nuevas:
+            if c in df.columns:
+                df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_historico_total(gid_map: dict, folder_id: str) -> pd.DataFrame:
+    """
+    Une:
+    1) Histórico del archivo principal
+    2) Todos los archivos historico* guardados en la carpeta de Drive
+    """
+    frames = []
+
+    # Histórico activo del spreadsheet principal
+    try:
+        df_actual = get_historico(gid_map)
+        if df_actual is not None and not df_actual.empty:
+            df_actual = df_actual.copy()
+            df_actual["__origen_hist__"] = "principal"
+            frames.append(df_actual)
+    except Exception:
+        pass
+
+    # Históricos archivados en carpeta de Drive
+    archivos = listar_archivos_historicos(folder_id)
+    for f in archivos:
+        df_arch = leer_historico_por_id(f["id"])
+        if df_arch is not None and not df_arch.empty:
+            df_arch = df_arch.copy()
+            df_arch["__origen_hist__"] = f.get("name", "historico")
+            frames.append(df_arch)
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True, sort=False)
+
+    # Deduplicación razonable
+    cols_pref = [
+        "fecha_reporte", "nss", "cama", "nombre", "ap_paterno", "ap_materno",
+        "fec_ingreso", "servicio", "piso"
+    ]
+    cols_dedup = [c for c in cols_pref if c in df.columns]
+
+    if cols_dedup:
+        df = df.drop_duplicates(subset=cols_dedup, keep="last")
+    else:
+        df = df.drop_duplicates()
+
+    return df
 
 
 # ======================================================
@@ -374,7 +511,6 @@ def stat_card(value: int, label: str, color_bg: str, icon: str):
 
 # ======================================================
 #        Módulo: Riesgo IAAS por cama (INSERTADO)
-#        (tomado del código 1, sin cambios en lógica)
 # ======================================================
 
 def modulo_riesgo():
@@ -439,10 +575,7 @@ def modulo_vigilancia():
     # --------- Fila 1: Selector (angosto) y, si aplica, plano a la derecha ---------
     st.markdown("#### Selecciona el sector del hospital:")
 
-    # ==========================
-    # FIX: Selector siempre muestra TODOS los pisos (ORDER_PISOS)
-    # y detecta columna piso aunque venga como "Piso", "piso ", etc.
-    # ==========================
+    # FIX: selector siempre muestra todos los pisos base
     try:
         df_vig_opts = get_vigilancia(gid_map)
     except Exception:
@@ -481,11 +614,11 @@ def modulo_vigilancia():
     df_vig = filtra_por_piso(df_vig, plano_sel)
     df_censo = df_vig[_es_paciente(df_vig)].copy()
 
-    # Para la vista con plano, volvemos a mostrar el PNG en una fila separada SOLO si no es UMAE completa
+    # Para la vista con plano, mostramos PNG si no es UMAE completa
     if _norm_piso(plano_sel) not in {"UMAE COMPLETA", "UMAE", "TODOS", "ALL"}:
         col_sel, col_plano = st.columns([1.1, 3.9])
         with col_sel:
-            st.empty()  # espacio para que el plano se alinee arriba
+            st.empty()
         with col_plano:
             imagen_path = os.path.join("data/planos", f"{plano_sel}.png")
             if os.path.exists(imagen_path):
@@ -505,7 +638,7 @@ def modulo_vigilancia():
         st.button("🔙 Regresar al menú principal", on_click=lambda: st.session_state.update(menu=None))
 
     with col_right:
-        # ===== Información general (siempre desde Viglancia/Vigilancia) =====
+        # ===== Información general =====
         st.markdown("### Información general")
         total_pac    = int(len(df_censo))
         iaas_total   = contar_iaas_totales(df_censo)
@@ -522,11 +655,11 @@ def modulo_vigilancia():
 
         st.markdown("---")
 
-        # --- Curva epidémica (fec_inicio_iaas_1..4) usando Histórico ∪ Viglancia ---
+        # --- Curva epidémica (Histórico total = principal + historicoN) ---
         if mostrar_curva_epidemica:
             st.subheader("📈 Curva Epidémica de IAAS (inicio de síntomas)")
             try:
-                df_hist = get_historico(gid_map)
+                df_hist = get_historico_total(gid_map, HIST_FOLDER_ID)
                 df_union = pd.concat([df_hist, df_vig], ignore_index=True, sort=False)
                 tmp = filtra_por_piso(df_union.copy(), plano_sel)
                 if tmp.empty:
@@ -555,14 +688,13 @@ def modulo_vigilancia():
                     else:
                         ev = pd.concat(eventos, ignore_index=True)
 
-                        # Agrupar por día (no por fecha-hora) y formatear etiqueta DD/MM/AAAA
                         serie = (
                             ev.groupby(ev["fec_inicio_iaas"].dt.date)
                               .size().reset_index(name="iaas_nuevas")
                               .rename(columns={"fec_inicio_iaas": "fecha_dia"})
                         )
                         serie["fecha_dt"] = pd.to_datetime(serie["fecha_dia"])
-                        dias = st.slider("Rango de días para la curva", 14, 180, 60, key="slider_curva_inicio")
+                        dias = st.slider("Rango de días para la curva", 14, 365, 60, key="slider_curva_inicio")
                         fmax = serie["fecha_dt"].max()
                         if pd.notna(fmax):
                             desde = fmax - pd.Timedelta(days=dias)
@@ -580,11 +712,11 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo calcular la curva epidémica: {e}")
 
-        # --- Captura en INOSO por fec_captura_1..4 (usando Histórico ∪ Viglancia) ---
+        # --- Captura en INOSO por fec_captura_1..4 (Histórico total) ---
         if mostrar_curva_captura:
             st.subheader("📊 Captura en INOSO (por fecha de captura)")
             try:
-                df_hist = get_historico(gid_map)
+                df_hist = get_historico_total(gid_map, HIST_FOLDER_ID)
                 df_union = pd.concat([df_hist, df_vig], ignore_index=True, sort=False)
                 tmp = filtra_por_piso(df_union.copy(), plano_sel)
 
@@ -609,14 +741,13 @@ def modulo_vigilancia():
                     else:
                         cap = pd.concat(caps, ignore_index=True)
 
-                        # Agrupar por día y formatear etiqueta DD/MM/AAAA
                         serie = (
                             cap.groupby(cap["fec_captura"].dt.date)
                                .size().reset_index(name="casos")
                                .rename(columns={"fec_captura": "fecha_dia"})
                         )
                         serie["fecha_dt"] = pd.to_datetime(serie["fecha_dia"])
-                        dias = st.slider("Rango de días para captura", 14, 180, 60, key="slider_cap")
+                        dias = st.slider("Rango de días para captura", 14, 365, 60, key="slider_cap")
                         fmax = serie["fecha_dt"].max()
                         if pd.notna(fmax):
                             desde = fmax - pd.Timedelta(days=dias)
@@ -634,7 +765,7 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo calcular la captura INOSO: {e}")
 
-        # --- Reporte de cultivos (desde Viglancia/Vigilancia) ---
+        # --- Reporte de cultivos ---
         if mostrar_reporte_cult:
             st.subheader("🧪 Reporte de cultivos")
             try:
@@ -648,7 +779,6 @@ def modulo_vigilancia():
                     if df_lab.empty:
                         st.info("Sin cultivos positivos en esta vista.")
                     else:
-                        # Filtro temporal
                         fecha_ref = "fecha_muestra" if "fecha_muestra" in df_lab.columns else (
                             "fecha_resultado" if "fecha_resultado" in df_lab.columns else None
                         )
@@ -659,7 +789,6 @@ def modulo_vigilancia():
                                 desde = fecha_max - pd.Timedelta(days=dias)
                                 df_lab = df_lab[df_lab[fecha_ref] >= desde]
 
-                        # Treemap de microorganismos (+ regla "Pendiente")
                         if "germen" in df_lab.columns:
                             df_lab["germen_plot"] = (
                                 df_lab["germen"].astype(str).str.strip()
@@ -681,7 +810,6 @@ def modulo_vigilancia():
                             fig_top.update_traces(root_color="lightgrey")
                             st.plotly_chart(fig_top, use_container_width=True)
 
-                        # Métrica y barras por tipo de muestra
                         st.metric(f"Registros de laboratorio ({plano_sel})", len(df_lab))
                         if "tipo_muestra" in df_lab.columns:
                             por_muestra = (
@@ -696,14 +824,13 @@ def modulo_vigilancia():
                                 fig_m.update_layout(xaxis_tickangle=-30)
                                 st.plotly_chart(fig_m, use_container_width=True)
 
-                        # Tabla detallada
                         drop_cols = {"Unnamed: 0", "index", "no_cultivo", "cultivo", "fec_ingreso"}
                         cols = [c for c in df_lab.columns if c not in drop_cols]
                         st.dataframe(df_lab[cols], use_container_width=True)
             except Exception as e:
                 st.error(f"No se pudo generar el reporte de cultivos: {e}")
 
-        # --- Censo nominal (desde Viglancia/Vigilancia) ---
+        # --- Censo nominal ---
         if mostrar_censo:
             st.subheader("📒 Censo nominal")
             try:
@@ -728,7 +855,7 @@ def modulo_vigilancia():
             except Exception as e:
                 st.error(f"No se pudo mostrar el censo nominal: {e}")
 
-    # --------- Cintilla de “Información actualizada” ---------
+    # --------- Cintilla de actualización ---------
     import os as _os
     try:
         from zoneinfo import ZoneInfo
