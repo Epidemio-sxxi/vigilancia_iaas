@@ -439,37 +439,41 @@ def modulo_vigilancia():
     # --------- Fila 1: Selector (angosto) y, si aplica, plano a la derecha ---------
     st.markdown("#### Selecciona el sector del hospital:")
 
-    # Cargamos una vez para opciones del combo
+    # ==========================
+    # FIX: Selector siempre muestra TODOS los pisos (ORDER_PISOS)
+    # y detecta columna piso aunque venga como "Piso", "piso ", etc.
+    # ==========================
     try:
         df_vig_opts = get_vigilancia(gid_map)
-        opciones_raw = (
-            sorted(df_vig_opts["piso"].dropna().astype(str).map(str.strip).unique())
-            if "piso" in df_vig_opts.columns else []
-        )
     except Exception:
         df_vig_opts = pd.DataFrame()
-        opciones_raw = []
 
-    # Ordenar con la lista de referencia (mantiene extras alfabéticos al final)
-    def ordena_pisos(opts):
-        norm_map = {o: _norm_piso(o) for o in opts}
-        base = [p for p in ORDER_PISOS if any(norm_map[o] == _norm_piso(p) for o in opts)]
-        base_original = []
-        for p in base:
-            for o in opts:
-                if norm_map[o] == _norm_piso(p):
-                    base_original.append(o)
-                    break
-        extra = [o for o in opts if _norm_piso(o) not in {_norm_piso(p) for p in ORDER_PISOS}]
-        return base_original + sorted(extra)
+    piso_col = None
+    if not df_vig_opts.empty:
+        cols_norm = {str(c).strip().lower(): c for c in df_vig_opts.columns}
+        piso_col = cols_norm.get("piso")
 
-    pisos_ordenados = ordena_pisos(opciones_raw)
-    opciones_sector = ["UMAE completa"] + pisos_ordenados
+    opciones_raw = []
+    if piso_col:
+        opciones_raw = sorted(
+            df_vig_opts[piso_col].dropna().astype(str).map(str.strip).unique()
+        )
 
-    # Renderizamos selector en una columna angosta; si hay plano, lo mostramos a la derecha
+    pisos_base = ORDER_PISOS.copy()
+    base_norm = {_norm_piso(p) for p in pisos_base}
+    extras = [o for o in opciones_raw if _norm_piso(o) not in base_norm]
+
+    opciones_sector = ["UMAE completa"] + pisos_base + sorted(extras)
+
     col_sel_only = st.columns([1.1])[0]
     with col_sel_only:
-        plano_sel = st.selectbox("", options=opciones_sector, index=0, label_visibility="collapsed", key="sel_piso")
+        plano_sel = st.selectbox(
+            "",
+            options=opciones_sector,
+            index=0,
+            label_visibility="collapsed",
+            key="sel_piso"
+        )
 
     # --------- Preparamos data filtrada según selección ---------
     df_vig = get_vigilancia(gid_map)
